@@ -23,7 +23,7 @@
 - **`stripe_count`**：该文件横跨的物理 OST 数量；
 - **`stripe_offset`**：第一个数据块存放的起始 OST 编号。
 
-```
+```text
 +-------------------------------------------------------------------------------+
 |                       经典条带化物理切分与分布全景 (stripe_count=4)          |
 +-------------------------------------------------------------------------------+
@@ -40,9 +40,9 @@
 
 **数学寻址公式**：
 当客户端要读取文件内偏移量为 $Offset$ 的数据时，客户端 LMV/LOV 驱动通过极速算术直接推导物理目标：
-$$\text{StripeIndex} = \left( \frac{\text{Offset}}{\text{stripe\_size}} \right) \pmod{\text{stripe\_count}}$$
-$$\text{TargetOST} = (\text{stripe\_offset} + \text{StripeIndex}) \pmod{\text{TotalOSTs}}$$
-$$\text{ObjectOffset} = \left( \lfloor \frac{\text{Offset}}{\text{stripe\_size} \times \text{stripe\_count}} \rfloor \times \text{stripe\_size} \right) + (\text{Offset} \pmod{\text{stripe\_size}})$$
+$$\text{StripeIndex} = \left( \frac{\text{Offset}}{\text{stripe}_\text{size}} \right) \pmod{\text{stripe}_\text{count}}$$
+$$\text{TargetOST} = (\text{stripe}_\text{offset} + \text{StripeIndex}) \pmod{\text{TotalOSTs}}$$
+$$\text{ObjectOffset} = \left( \lfloor \frac{\text{Offset}}{\text{stripe}_\text{size} \times \text{stripe}_\text{count}} \rfloor \times \text{stripe}_\text{size} \right) + (\text{Offset} \pmod{\text{stripe}_\text{size}})$$
 
 客户端**无需经过任何中心节点查询**，直接向计算出的 `TargetOST` 发起 RDMA 读取。数十台客户端同时并发读取该文件时，所有 OST 的物理网络和硬盘被同时打满，吞吐呈现完美的线性叠加！
 
@@ -62,7 +62,7 @@ $$\text{ObjectOffset} = \left( \lfloor \frac{\text{Offset}}{\text{stripe\_size} 
 
 PFL 允许一个文件拥有复合的、基于区间（Extent）分级的多个布局组件（Components），查看源码 [`include/uapi/linux/lustre/lustre_user.h:1164`](https://github.com/lustre/lustre-release/blob/master/include/uapi/linux/lustre/lustre_user.h#L1164)：
 
-```
+```text
 +-------------------------------------------------------------------------------+
 |                       PFL 渐进式复合布局物理架构                              |
 +-------------------------------------------------------------------------------+
@@ -106,7 +106,7 @@ lfs setstripe -E 256M -c 1 -S 1M \
 
 Lustre 2.11 推出了 **Data-on-MDT（DoM）** 技术：**直接把小文件数据塞进 MDT 的全闪 NVMe 盘中！**
 
-```
+```text
 +-------------------------------------------------------------------------------+
 |                       DoM 消除网络往返执行时序对比                            |
 +-------------------------------------------------------------------------------+
@@ -143,7 +143,7 @@ Lustre 2.11 引入的 **FLR（File-Level Redundancy）** 赋予了系统原生�
 
 一个启用了 FLR 的文件，在 `lov_comp_md_v1` 中拥有多个平行的镜像（Mirrors）。每个 Mirror 自身可以是一个独立的 PFL 布局，甚至可以分别落在不同的 OST 物理池（Pool）中（例如 Mirror 0 在本地 NVMe 池，Mirror 1 在远端备份机械盘池）：
 
-```
+```text
 +-------------------------------------------------------------------------------+
 |                       FLR 文件级镜像双写与状态机                              |
 +-------------------------------------------------------------------------------+

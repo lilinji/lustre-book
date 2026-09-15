@@ -17,7 +17,7 @@
 
 当用户态程序（如 Python 训练脚本、C 语言 MPI 应用）调用标准的 POSIX `write(fd, buf, count)` 时，请求在 Lustre 内核客户端经历了一场精密的接力赛：
 
-```
+```text
 +-------------------------------------------------------------------------------+
 |                       Lustre 客户端端到端写入流水线全景                       |
 +-------------------------------------------------------------------------------+
@@ -77,7 +77,7 @@
 Lustre 设计了著名的 **Grant 机制**（[`lustre/osc/osc_cache.c`](https://github.com/lustre/lustre-release/blob/master/lustre/osc/osc_cache.c)）：
 **“客户端在本地将任何一个 Page 标记为脏页之前，必须持有对应 OST 签署的‘信用支票（Grant）’。”**
 
-```
+```text
 +-------------------------------------------------------------------------------+
 |                       Grant 信用额度四态转换生命周期                          |
 +-------------------------------------------------------------------------------+
@@ -126,7 +126,7 @@ Lustre 设计了著名的 **Grant 机制**（[`lustre/osc/osc_cache.c`](https://
 在千兆时代，网络 RPC 大小通常为 64KB；而在 200Gb/s HDR/NDR InfiniBand 时代，微型报文会把网卡的中断和 PCIe 总线活生生冲垮。
 Lustre 的客户端 OSC 维护了精细的 **聚合待发队列**：
 
-```
+```text
 +-------------------------------------------------------------------------------+
 |                       OSC 页面聚合与超大 Bulk 报文组装                        |
 +-------------------------------------------------------------------------------+
@@ -161,7 +161,7 @@ Lustre 的客户端 OSC 维护了精细的 **聚合待发队列**：
 
 Lustre 提供了高度优化的 **直接 IO 旁路（Direct IO, O_DIRECT）**：
 
-```
+```text
 +-------------------------------------------------------------------------------+
 |                       标准缓冲 IO vs Direct IO vs GPU Direct 路径对比         |
 +-------------------------------------------------------------------------------+
@@ -239,14 +239,14 @@ lctl set_param osc.*.max_rpcs_in_flight=32
    cat /proc/fs/lustre/osc/lustre-OST0008-osc-*/cur_grant_bytes
    # cur_grant_bytes: 0
    # cur_dirty_bytes: 33554432 (32MB)
-   ```
+   ```text
    **惊人发现**：客户端针对 OST0008 的可用 Grant 余额居然彻底归零！
 2. **定位空间耗尽根因**：
    检查 OST0008 的物理剩余空间：
    ```bash
    lfs df -h
    # OST0008 剩余可用空间仅剩 1.2GB (利用率 99.8%)
-   ```
+   ```text
 3. **深入 Grant 流控源码**：
    根据 [`osc_cache.c`](https://github.com/lustre/lustre-release/blob/master/lustre/osc/osc_cache.c#L1310) 的保护机制：
    - 当 OST 物理空间低于安全阈值时，服务端拒绝向任何客户端下发新的 Grant 预留额度；
@@ -262,7 +262,7 @@ lctl set_param osc.lustre-OST0008-osc-*.import=deactivate
 
 # 步骤 2: 临时在服务端放宽保留空间上限或清理大文件
 lfs find /mnt/lustre --ost lustre-OST0008 -size +100G
-```
+```text
 
 ---
 

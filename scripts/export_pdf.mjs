@@ -56,6 +56,12 @@ const args = [
   '--headless=new',
   '--disable-gpu',
   '--run-all-compositor-stages-before-draw',
+  // Mermaid renders diagrams asynchronously (it must measure text before it can
+  // lay out the SVG). --print-to-pdf does NOT wait for that work: with a 3s
+  // delayed render the diagrams are silently dropped from the PDF. A virtual
+  // time budget fast-forwards pending timers so every diagram is on the page
+  // before the snapshot is taken.
+  '--virtual-time-budget=30000',
   '--no-pdf-header-footer',
   `--print-to-pdf=${tempPdfFile}`,
   htmlFile

@@ -14,22 +14,19 @@
 
 在构建超万张 GPU 的大模型训练算力池或国家级超算集群时，存储网络面临着人类计算机工业史上最苛刻的通信挑战：
 
-```text
-现代智算中心典型的异构网络拓扑：
-[ GPU 计算节点集群 ]                             [ 专职存储集群 (MDS / OSS) ]
-(8x 400G InfiniBand Compute Fabric)               (多路 200G/400G 聚合存储节点)
-         │                                                     │
-         │ (o2ib0 / RoCE)                                      │ (o2ib1 / o2ib2)
-         ▼                                                     ▼
-+─────────────────────────────────────────────────────────────────────────────+
-|                          LNet Router 路由转发集群                            |
-|       - 桥接计算端 IB 与存储端 IB/RoCE                                        |
-|       - 解决不同子网、不同 MTU (4KB vs 9KB)、不同安全域的报文高速线速转发        |
-+─────────────────────────────────────────────────────────────────────────────+
-         ▲                                                     ▲
-         │ (tcp0 / 100GbE)                                     │ (tcp1 / 25GbE)
-         │                                                     │
-[ 编译/预处理节点 (CPU集群) ]                         [ 运维与监控审计节点 ]
+```mermaid
+%% 现代智算中心典型的异构网络拓扑
+flowchart TD
+    GPU["GPU 计算节点集群<br/>8x 400G InfiniBand Compute Fabric"]
+    STORE["专职存储集群 MDS / OSS<br/>多路 200G/400G 聚合存储节点"]
+    ROUTER["LNet Router 路由转发集群<br/>· 桥接计算端 IB 与存储端 IB/RoCE<br/>· 解决不同子网、不同 MTU 4KB vs 9KB、不同安全域的报文高速线速转发"]
+    COMPILE["编译/预处理节点 CPU 集群"]
+    OPS["运维与监控审计节点"]
+
+    GPU -->|"o2ib0 / RoCE"| ROUTER
+    STORE -->|"o2ib1 / o2ib2"| ROUTER
+    COMPILE -->|"tcp0 / 100GbE"| ROUTER
+    OPS -->|"tcp1 / 25GbE"| ROUTER
 ```
 
 1. **CPU 协议栈开销瓶颈**：  
@@ -75,23 +72,21 @@ struct lnet_nid {
 - **LNet NI（Network Interface）**：本地主机上的一个具体 LNet 网络接口（对应一块物理 InfiniBand HCA 卡或以太网网卡）。
 - **LNet Peer**：远程对等节点的抽象。**一个远程物理节点可以同时拥有多个 NID**（如既有 InfiniBand NID，又有管理以太网 NID）。
 
-```text
-+-------------------------------------------------------------------------------+
-|                       本地计算节点 (Local Host / Client)                        |
-|   ┌───────────────────────────────┐       ┌───────────────────────────────┐   |
-|   │ LNet NI 0: 10.1.1.10@o2ib0    │       │ LNet NI 1: 10.1.2.10@o2ib1    │   |
-|   │ (物理网卡 ib0, NUMA 0)        │       │ (物理网卡 ib1, NUMA 1)        │   |
-|   └──────────────┬────────────────┘       └──────────────┬────────────────┘   |
-+------------------┼───────────────────────────────────────┼--------------------+
-                   │ Multi-Rail 并发并发流 / 负载均衡        │
-                   ▼                                       ▼
-+-------------------------------------------------------------------------------+
-|                      远程存储对等节点 (Remote Peer / OSS)                       |
-|   ┌───────────────────────────────┐       ┌───────────────────────────────┐   |
-|   │ Peer NI 0: 10.1.1.20@o2ib0   │       │ Peer NI 1: 10.1.2.20@o2ib1   │   |
-|   │ (物理网卡 ib0, NUMA 0)        │       │ (物理网卡 ib1, NUMA 1)        │   |
-|   └───────────────────────────────┘       └───────────────────────────────┘   |
-+-------------------------------------------------------------------------------+
+```mermaid
+flowchart TD
+    subgraph LOCAL["本地计算节点 Local Host / Client"]
+        direction LR
+        NI0["LNet NI 0: 10.1.1.10@o2ib0<br/>物理网卡 ib0, NUMA 0"]
+        NI1["LNet NI 1: 10.1.2.10@o2ib1<br/>物理网卡 ib1, NUMA 1"]
+    end
+    subgraph REMOTE["远程存储对等节点 Remote Peer / OSS"]
+        direction LR
+        PNI0["Peer NI 0: 10.1.1.20@o2ib0<br/>物理网卡 ib0, NUMA 0"]
+        PNI1["Peer NI 1: 10.1.2.20@o2ib1<br/>物理网卡 ib1, NUMA 1"]
+    end
+
+    NI0 -->|"Multi-Rail 并发流 / 负载均衡"| PNI0
+    NI1 -->|"Multi-Rail 并发流 / 负载均衡"| PNI1
 ```
 
 ---
@@ -129,23 +124,18 @@ struct lnet_nid {
 
 LNet 本身是无状态的报文路由器与队列调度器，真正的物理层报文发射与接收由 **LND（LNet Network Driver）** 驱动承载。
 
-```text
-                               +-----------------------------+
-                               |     LNet 核心路由与调度层     |
-                               +--------------+--------------+
-                                              |
-               ┌──────────────────────────────┴──────────────────────────────┐
-               ▼                                                             ▼
-+-----------------------------+                               +-----------------------------+
-|    klnds/o2iblnd (RDMA)     |                               |    klnds/socklnd (TCP/IP)   |
-|                             |                               |                             |
-| - 内存注册: FastReg / FMR    |                               | - 内核 Socket 连接池复用    |
-| - 描述符: Scatter-Gather List |                               | - 零拷贝页发送: kernel_sendpage|
-| - 硬件流控: RDMA Credits     |                               | - 接收端高效聚合: tcp_read     |
-+--------------+--------------+                               +--------------+--------------+
-               │                                                             │
-               ▼ (InfiniBand Verbs API)                                      ▼ (Linux TCP/IP Stack)
-      [ IB / RoCE 网卡 ]                                            [ 标准以太网网卡 ]
+```mermaid
+flowchart TD
+    CORE["LNet 核心路由与调度层"]
+    IB["klnds/o2iblnd (RDMA)<br/>· 内存注册: FastReg / FMR<br/>· 描述符: Scatter-Gather List<br/>· 硬件流控: RDMA Credits"]
+    SOCK["klnds/socklnd (TCP/IP)<br/>· 内核 Socket 连接池复用<br/>· 零拷贝页发送: kernel_sendpage<br/>· 接收端高效聚合: tcp_read"]
+    IBNIC["IB / RoCE 网卡"]
+    ETHNIC["标准以太网网卡"]
+
+    CORE --> IB
+    CORE --> SOCK
+    IB -->|InfiniBand Verbs API| IBNIC
+    SOCK -->|Linux TCP/IP Stack| ETHNIC
 ```
 
 ### 2.4.1 `o2iblnd`：InfiniBand / RoCE 上的零拷贝 RDMA 实现

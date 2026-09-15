@@ -23,7 +23,7 @@
 - **`credits`**：本地网络接口（LND）允许同时并发挂在物理网卡发送队列上的最大报文总数；
 - **`peer_credits`**：本地允许向同一个目标 NID 并发发送的最大报文数。
 
-```
+```text
 +-------------------------------------------------------------------------------+
 |                       LNet Credits 队列吞吐饱和模型                           |
 +-------------------------------------------------------------------------------+
@@ -87,8 +87,8 @@ lctl set_param osc.*.max_pages_per_rpc=1024
 
 很多管理员误以为“服务端线程数设得越多越好”，结果将线程数设为 4,096，导致系统发生灾难性的 CPU 线程上下文切换（Context Switch）：
 - **OST IO 线程池推荐计算公式**：
-  $$\text{threads\_max} = \min(1024, \text{CPU\_Cores} \times 8)$$
-  $$\text{threads\_min} = \max(64, \text{CPU\_Cores} \times 2)$$
+  $$\text{threads}_\text{max} = \min(1024, \text{CPU}_\text{Cores} \times 8)$$
+  $$\text{threads}_\text{min} = \max(64, \text{CPU}_\text{Cores} \times 2)$$
 
 ```bash
 # 在 OSS 节点动态调整服务线程水位
@@ -105,7 +105,7 @@ lctl set_param ost.OSS.ost_io.threads_max=512
 在多客户端并发修改元数据（如共同在一个目录下创建文件）时，默认策略是每个事务到达后立即等待日志物理 `fsync` 落盘。
 Lustre 提供了原子合并神技：**`commit_on_sharing`（CoS）**（[`lustre/include/uapi/linux/lustre/lustre_idl.h:2605`](https://github.com/lustre/lustre-release/blob/master/include/uapi/linux/lustre/lustre_idl.h#L2605)）：
 
-```
+```text
 +-------------------------------------------------------------------------------+
 |                       Commit-on-Sharing (CoS) 合并落盘时序                    |
 +-------------------------------------------------------------------------------+

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repository is
 
-This is not a software project — it is the **source of a Chinese-language technical book** about the Lustre distributed filesystem, built with [mdBook](https://rust-lang.github.io/mdBook/). The "code" is Markdown prose, ASCII architecture diagrams, C source excerpts from the upstream [`lustre/lustre-release`](https://github.com/lustre/lustre-release) tree, and shell snippets (`lctl`/`lfs`) that must be syntactically plausible.
+This is not a software project — it is the **source of a Chinese-language technical book** about the Lustre distributed filesystem, built with [mdBook](https://rust-lang.github.io/mdBook/). The "code" is Markdown prose, Mermaid and ASCII architecture diagrams, C source excerpts from the upstream [`lustre/lustre-release`](https://github.com/lustre/lustre-release) tree, and shell snippets (`lctl`/`lfs`) that must be syntactically plausible.
 
 All book content is written in Simplified Chinese (zh-CN). Keep it that way when editing chapters.
 
@@ -48,6 +48,8 @@ There is no test suite, linter, or CI config. `verify_links.mjs` and `mdbook bui
 
 If the target PDF is **locked by a PDF reader**, the script cannot rename over it and silently writes `<title>-latest.pdf` instead, printing a note. This has already happened in this repo — both `Lustre_分布式文件系统：...pdf` and `...-latest.pdf` exist at the root, and the `-latest` one is the newer build. Check which file you actually produced rather than assuming the primary name is current. PDFs are gitignored.
 
+The exporter passes `--virtual-time-budget=30000` and this is **load-bearing, not decoration**. `--print-to-pdf` does not wait for async JS: a page whose Mermaid render is delayed by 3 s loses its diagrams from the PDF entirely while still producing a plausible-looking file (verified — same book, 1 page instead of 8 on a probe page). The virtual time budget fast-forwards pending timers so every diagram is laid out before the snapshot. Do not remove it.
+
 ## Content architecture and conventions
 
 ### mdBook wiring
@@ -86,6 +88,28 @@ Two link classes coexist, and mixing them up breaks the published site or the Gi
 **Never use `file:///` absolute local paths.** `verify_links.mjs` exits 1 on any that appear, and they are meaningless once the repo is on GitHub. `scripts/convert_links_to_github.mjs` was the one-time migration that rewrote them — it is idempotent and now a no-op on a clean tree; you normally do not need to run it.
 
 Relative links are resolved from the containing file's directory, so a link from `part-03-…/07-obd-model.md` to chapter 13 must include the `../part-05-…/` prefix.
+
+### Diagrams: Mermaid vs ASCII
+
+The 7 flow/topology diagrams are ````mermaid` fences (README + `part-01-foundation`); everything else that is a diagram is an ASCII ````text` block, and **every non-diagram plain fence is tagged ````text`** so it renders consistently. Don't reintroduce bare ``` fences.
+
+GitHub renders ````mermaid` natively. mdBook does not — it has no Mermaid preprocessor here and `mdbook-mermaid`/`cargo` are not installed. The bridge is two vendored files wired through `additional-js`:
+
+- `js/mermaid.min.js` — Mermaid 11, committed (not a CDN link) so builds and PDF export work offline
+- `js/mermaid-init.js` — rewrites mdBook's `<pre><code class="language-mermaid">` into `<div class="mermaid">` and calls `mermaid.run()`; it also re-renders on mdBook theme switches so diagrams stay legible in the dark themes
+
+**Mermaid layout gotcha**: `direction LR` inside a `subgraph` is silently ignored, and two sibling nodes with no edges between them stack vertically into a narrow, badly-wrapped column. For a "container holds N parallel things" diagram, model the container as a **parent node with one arrow per child** (`flowchart TD`); Mermaid then lays the children out side by side. This is what the CPT and Tracefile diagrams do.
+
+Keep memory-layout and struct field dumps as ASCII — Mermaid cannot express byte offsets, so converting them loses information.
+
+### Math on GitHub (the other correctness hazard)
+
+Two constructs render fine under mdBook/PDF but break on GitHub, because GitHub parses the Markdown with CommonMark *before* MathJax runs:
+
+- **`\_`, `\%`, `\{`, `\}` inside `$…$`.** CommonMark consumes the backslash as a punctuation escape and hands MathJax `\text{threads_max}` → `'_' allowed only in math mode`. Never write `\text{a\_b}`. Use a math-mode subscript instead: `\text{a}_\text{b}` — valid in both renderers.
+- **A bare `%` in inline math**, which TeX swallows as a comment. Write the literal `±20%` rather than `$\pm 20\%$` when the math markup isn't load-bearing.
+
+When auditing formulas, search only *inside* math spans. A plain `grep '\_'` is useless here — this repo has thousands of literal `\_` in C and shell code blocks that are correct and must stay. Extract the `$…$` / `$$…$$` spans first, then flag `\_` / `\%` / `\{` / `\}` within them.
 
 ### Governance docs
 

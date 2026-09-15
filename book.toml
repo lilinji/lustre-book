@@ -14,3 +14,9 @@ git-repository-url = "https://github.com/lustre/lustre-release"
 default-theme = "rust"
 preferred-dark-theme = "coal"
 mathjax-support = true
+
+# Mermaid is vendored locally (not loaded from a CDN) so the HTML build and the
+# headless-Chromium PDF export both work offline and render identically.
+# mermaid.min.js must load first; mermaid-init.js converts the language-mermaid
+# code fences into diagrams.
+additional-js = ["js/mermaid.min.js", "js/mermaid-init.js"]

@@ -14,7 +14,7 @@
 
 答案写在现代超算与数据中心的硬件物理铁律之中：
 
-```
+```text
 +-------------------------------------------------------------------------------+
 |                       通用 RPC 协议 vs Lustre 线路协议对比                    |
 +-------------------------------------------------------------------------------+
@@ -42,7 +42,7 @@
 
 所有穿梭于 LNet 之上的 Lustre RPC 报文，其物理内存的最前端都必须是一个全局唯一的信封头：[`struct lustre_msg_v2`](https://github.com/lustre/lustre-release/blob/master/include/uapi/linux/lustre/lustre_idl.h#L590-L604)。
 
-```
+```text
 +-------------------------------------------------------------------------------+
 |                    struct lustre_msg_v2 物理内存排布 (32 字节 + 变长尾)       |
 +-------------------------------------------------------------------------------+
@@ -109,7 +109,7 @@ struct lustre_msg_v2 {
    客户端发送请求时，**必须提前计算并通知服务端它所期望的最大 Reply 大小**。服务端收到请求后，直接根据 `lm_repsize` 分配回包内存。这彻底杜绝了服务端动态重试和协商回包大小的开销。
 5. **`lm_buflens[]` 柔性数组与 8 字节补齐计算**：
    每个子缓冲区 `n` 的数据首地址并不是简单的紧随其后，而是必须经过 8 字节向上对齐。计算公式位于 [`lustre/ptlrpc/pack_generic.c`](https://github.com/lustre/lustre-release/blob/master/lustre/ptlrpc/pack_generic.c#L39)：
-   $$\text{HeaderEnd} = \text{round\_up}(\text{offsetof}(\text{struct lustre\_msg\_v2}, \text{lm\_buflens}[\text{count}]), 8)$$
+   $$\text{HeaderEnd} = \text{round}_\text{up}(\text{offsetof}(\text{struct lustre}_\text{msg}_\text{v2}, \text{lm}_\text{buflens}[\text{count}]), 8)$$
    每个 Buffer 同样按 8 字节对齐排列。
 
 ---
@@ -158,7 +158,7 @@ struct ptlrpc_body_v3 {
 - 服务端回包时，将该 `pb_transno` 写入 `ptlrpc_body`。客户端收到应答后，**绝不能立即丢弃该 RPC 请求**！客户端必须将该请求保留在本地未确认重放队列（`imp_replay_list`）中。
 - 只有当服务端随后的回包中，**`pb_last_committed >= pb_transno`**（说明该事务不仅在服务端内存中完成，并且其 WAL 日志已经实际被 `sync` 到物理磁盘介质），客户端才能安全将该请求从内存中彻底释放！
 
-```
+```text
 Client                                      MDT / OST (Server)
   |                                                  |
   |--- (1) RPC Request (mkdir /foo) ---------------->| [处理事务，分配 transno=10086]
@@ -194,7 +194,7 @@ struct mdt_body *body = (void *)((char *)msg + sizeof(struct lustre_msg) +
 
 为此，Lustre 在 [`lustre_req_layout.h`](https://github.com/lustre/lustre-release/blob/master/lustre/include/lustre_req_layout.h) 中设计了享誉内核界的 **Request Capsule（代码中通称为 "Pill"，即药丸）** 抽象层。
 
-```
+```text
 +-------------------------------------------------------------------------------+
 |                       Request Capsule (Pill) 架构全景                         |
 +-------------------------------------------------------------------------------+
@@ -274,7 +274,7 @@ req_capsule_server_grow(&req->rq_pill, &RMF_MDT_MD, layout_size);
 
 Lustre 既没有像网络协议那样强制“所有字段在发送前全部转换为网络字节序（Big-Endian）”，也没有在发送端消耗 CPU。**它采取了“发送端直接裸发本地字节序，接收端按需原地翻转（Lazy Swab-on-Demand）”的极致策略**。
 
-```
+```text
 发送端 (Little-Endian)                  接收端 (Big-Endian)
        |                                        |
        | 裸内存发送，不做任何转换                | 嗅探 magic:

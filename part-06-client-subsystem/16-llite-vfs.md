@@ -22,7 +22,7 @@
 
 `llite` 的核心职责，就是将这些单机视角的 VFS 结构，与底层的 `lmv`、`lov`、`cl_object` 和 `ptlrpc` 建立起严密的双向绑定：
 
-```
+```text
 +-------------------------------------------------------------------------------+
 |                       llite 在 Linux 内核中的桥梁定位全景                     |
 +-------------------------------------------------------------------------------+
@@ -123,7 +123,7 @@ const struct inode_operations ll_file_inode_operations = {
 
 Lustre 在 [`lustre/llite/namei.c`](https://github.com/lustre/lustre-release/blob/master/lustre/llite/namei.c) 中为所有 dentry 注册了专用的重新验证钩子：**`ll_d_revalidate()`**。
 
-```
+```text
 +-------------------------------------------------------------------------------+
 |                       ll_d_revalidate 零网络验证时序                          |
 +-------------------------------------------------------------------------------+
@@ -176,7 +176,7 @@ Lustre 将 Linux 单机的 Dentry 生命周期，与全局分布式的 **IBITS �
 # free -m
               total        used        free      shared  buff/cache   available
 Mem:         515620      498210        2100          12       15310       14200
-```
+```text
 奇怪的是：`ps aux` 中所有用户进程占用的内存加起来只有不到 50GB。
 管理员尝试执行 `echo 3 > /proc/sys/vm/drop_caches` 强制回收 PageCache，但内存**仅仅释放了区区 1GB，剩余 450GB 内存依然彻底失联！**
 
@@ -191,7 +191,7 @@ slabtop -sc -o | head -n 15
 #   OBJS ACTIVE  USE OBJ SIZE  SLABS OBJ/SLAB CACHE SIZE NAME
 # 124501200 124500000  99%    0.19K 3890662       32    24890240K dentry
 # 121004100 120900000  99%    1.08K 3781378       32   120902400K lustre_inode_cache
-```
+```text
 
 **真相大白**：
 - 单独一个计算节点在内存中积压了 **1.2 亿个 `dentry` 和 1.2 亿个 `lustre_inode_cache`**，活生生吃光了 450GB 物理内存！
@@ -217,7 +217,7 @@ free -m
 # 步骤 4: 生产长效加固 (写入 /etc/modprobe.d/lustre.conf，限制客户端锁贪婪上限)
 # 针对内存敏感节点，限制最大闲置锁缓存为 2000 把
 options lustre ldlm_max_unused=2000
-```
+```text
 
 ---
 

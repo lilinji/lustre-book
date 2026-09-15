@@ -15,7 +15,7 @@
 
 Lustre 采用了源自超算 Portals 体系的设计哲学：**控制流（Control Plane）与数据流（Data Plane）彻底分离**。
 
-```
+```text
 +-------------------------------------------------------------------------------+
 |                       Portal RPC 控制与数据解耦架构全景                       |
 +-------------------------------------------------------------------------------+
@@ -85,7 +85,7 @@ struct ptlrpcd {
 
 在内核分布式文件系统中，有一个极其致命的隐蔽陷阱：**RPC 完成回调中的嵌套 RPC 死锁**。
 
-```
+```text
 [场景]：
 1. 客户端发起了读操作 RPC-A。
 2. ptlrpcd 线程收到了 RPC-A 的应答，并就地执行其 interpret_callback。
@@ -99,7 +99,7 @@ struct ptlrpcd {
 Lustre 设计了极为精妙的 **伙伴线程组机制（Partner Group Policy）**：
 每个 `ptlrpcd` 线程都不是孤立的，它至少拥有一个伙伴线程（Partner Thread，默认 `ptlrpcd_partner_group_size = 2`）。
 
-```
+```text
 +-------------------------------------------------------------------------------+
 |                       ptlrpcd 伙伴线程组 (Partner Group) 防死锁机制           |
 +-------------------------------------------------------------------------------+
@@ -127,7 +127,7 @@ Lustre 设计了极为精妙的 **伙伴线程组机制（Partner Group Policy�
 每一个在网络中飞行的请求，在代码中都由一个庞大的结构体 [`struct ptlrpc_request`](https://github.com/lustre/lustre-release/blob/master/lustre/include/lustre_net.h#L988) 承载。
 它的生命周期由严密的内核状态机调度驱动：
 
-```
+```text
 +-------------------------------------------------------------------------------+
 |                       ptlrpc_request 七阶段状态机流转图                       |
 +-------------------------------------------------------------------------------+
@@ -200,7 +200,7 @@ Lustre 设计了极为精妙的 **伙伴线程组机制（Partner Group Policy�
 服务端的高性能吞吐，仰赖于多层缓冲池与事件分离架构。
 每个服务（如 `ost_io`）由一个 [`struct ptlrpc_service`](https://github.com/lustre/lustre-release/blob/master/lustre/include/lustre_net.h) 代表，并在底层按 CPT 划分为多个独立的 [`struct ptlrpc_service_part`](https://github.com/lustre/lustre-release/blob/master/lustre/include/lustre_net.h#L1694)。
 
-```
+```text
 +-------------------------------------------------------------------------------+
 |                     ptlrpc_service_part 内部物理流水线                        |
 +-------------------------------------------------------------------------------+
@@ -284,7 +284,7 @@ struct ptlrpc_bulk_desc {
 
 这是高性能存储系统设计中极其深刻的安全与流控权衡：
 
-```
+```text
 [若由客户端主动推数据（Push）]：
 客户端将 4MB 数据一股脑推送给服务端 -> 服务端此时本地磁盘满载或正在执行事务 Flush ->
 没有空闲内存接收 -> 内存溢出（OOM）或网络层丢包重传！

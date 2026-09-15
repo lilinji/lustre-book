@@ -15,15 +15,16 @@
 
 在这样的硬件底座上运行单机文件系统或朴素的分布式客户端，会立即撞上两大致命暗礁：
 
-```text
-传统单机/朴素架构面临的灾难：
-[ Socket 0 / NUMA 0 ]  <==== 跨片 QPI/UPI 总线争抢 (延迟 x3, 带宽腰斩) ====>  [ Socket 1 / NUMA 1 ]
-   │                                                                         │
-   ├─ Core 0~63                                                              ├─ Core 64~127
-   └─ 本地内存通道 (DDR5)                                                     └─ 本地内存通道 (DDR5)
-         │                                                                         │
-         └─────────────► 竞争全局自旋锁 (Spinlock Contention) ◄────────────────────┘
-                         CPU 利用率 100%，但实际吞吐暴跌至 5%（锁颠簸）
+```mermaid
+%% 传统单机/朴素架构面临的灾难
+flowchart TD
+    S0["Socket 0 / NUMA 0<br/>Core 0~63<br/>本地内存通道 DDR5"]
+    S1["Socket 1 / NUMA 1<br/>Core 64~127<br/>本地内存通道 DDR5"]
+    LOCK["竞争全局自旋锁 Spinlock Contention<br/>CPU 利用率 100%，但实际吞吐暴跌至 5%（锁颠簸）"]
+
+    S0 <==>|"跨片 QPI/UPI 总线争抢<br/>延迟 x3，带宽腰斩"| S1
+    S0 -->|争抢| LOCK
+    S1 -->|争抢| LOCK
 ```
 
 1. **跨 NUMA 内存访问与全局自旋锁雪崩**：  
@@ -43,17 +44,11 @@
 
 在 `libcfs` 的心智模型中，Lustre **不再直接面对物理 CPU 核心或物理 NUMA 节点，而是将其划分为若干相互隔离的“虚拟处理单元”（CPU Partition，简称 CPT）**。
 
-```text
-+-------------------------------------------------------------------------------+
-|                       全局 CPU 分区表: cfs_cpt_table (Global)                   |
-+---------------------------------------+---------------------------------------+
-|           Partition 0 (CPT 0)         |           Partition 1 (CPT 1)         |
-|   - 绑定 NUMA Node 0                  |   - 绑定 NUMA Node 1                  |
-|   - CPU Mask: [Core 0 ... Core 63]    |   - CPU Mask: [Core 64 ... Core 127]  |
-|   - 独立内存分配池 (Local Slab/Page)    |   - 独立内存分配池 (Local Slab/Page)    |
-|   - 专属服务线程池 (ptlrpc_service)    |   - 专属服务线程池 (ptlrpc_service)    |
-|   - 专属网络事件循环 (lnet_peer_table)|   - 专属网络事件循环 (lnet_peer_table)|
-+---------------------------------------+---------------------------------------+
+```mermaid
+flowchart TD
+    TABLE["全局 CPU 分区表 cfs_cpt_table (Global)"]
+    TABLE --> CPT0["Partition 0 / CPT 0<br/>· 绑定 NUMA Node 0<br/>· CPU Mask: Core 0 ... Core 63<br/>· 独立内存分配池 Local Slab/Page<br/>· 专属服务线程池 ptlrpc_service<br/>· 专属网络事件循环 lnet_peer_table"]
+    TABLE --> CPT1["Partition 1 / CPT 1<br/>· 绑定 NUMA Node 1<br/>· CPU Mask: Core 64 ... Core 127<br/>· 独立内存分配池 Local Slab/Page<br/>· 专属服务线程池 ptlrpc_service<br/>· 专属网络事件循环 lnet_peer_table"]
 ```
 
 所有上层服务（包括 LNet 消息队列、Portal RPC 服务线程池、连接表、页面分配器）均以 CPT 为边界进行实例化：
@@ -129,22 +124,13 @@ spin_lock(&service_part[cpt]->sp_lock);
 
 Lustre 针对该痛点设计了专属的 **环形内存跟踪系统（`lnet/libcfs/tracefile.c`）**。
 
-```text
-+-------------------------------------------------------------------------------+
-|                      libcfs 内存环形无锁跟踪日志系统 (Tracefile)                 |
-+---------------------------------------+---------------------------------------+
-|            Per-CPU Buffer (CPU 0)     |            Per-CPU Buffer (CPU 1)     |
-|   ┌───────────────────────────────┐   |   ┌───────────────────────────────┐   |
-|   │ cfs_trace_page 0 (4KB Ring)   │   |   │ cfs_trace_page 0 (4KB Ring)   │   |
-|   │ cfs_trace_page 1 (4KB Ring)   │   |   │ cfs_trace_page 1 (4KB Ring)   │   |
-|   │ ...                           │   |   │ ...                           │   |
-|   └──────────────┬────────────────┘   |   └──────────────┬────────────────┘   |
-+------------------┼--------------------+------------------┼--------------------+
-                   │                                       │
-                   └───────────────────┬───────────────────┘
-                                       │ 异步刷盘 / lctl dk 命令导出
-                                       ▼
-                       /tmp/lustre-log-dump.txt (现场黑匣子)
+```mermaid
+flowchart TD
+    TF["libcfs 内存环形无锁跟踪日志系统 Tracefile"]
+    TF --> C0["Per-CPU Buffer CPU 0<br/>cfs_trace_page 0 (4KB Ring)<br/>cfs_trace_page 1 (4KB Ring)<br/>..."]
+    TF --> C1["Per-CPU Buffer CPU 1<br/>cfs_trace_page 0 (4KB Ring)<br/>cfs_trace_page 1 (4KB Ring)<br/>..."]
+    C0 -->|"异步刷盘 / lctl dk 命令导出"| DUMP["/tmp/lustre-log-dump.txt<br/>现场黑匣子"]
+    C1 -->|"异步刷盘 / lctl dk 命令导出"| DUMP
 ```
 
 ### 1.3.1 零锁设计原则
