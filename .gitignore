@@ -14,3 +14,7 @@ node_modules/
 Thumbs.db
 .vscode/
 .idea/
+
+# Local-only governance & agent docs: kept on disk, not published to the repo
+docs/
+CLAUDE.md
