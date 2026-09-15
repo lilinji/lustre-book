@@ -8,12 +8,15 @@ node_modules/
 # Build artifacts & PDF exports
 .tmp_*
 *.tmp
+*-latest.pdf
 
 # System & Editor files
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+__pycache__/
+*.pyc
 
 # Local-only governance & agent docs: kept on disk, not published to the repo
 docs/

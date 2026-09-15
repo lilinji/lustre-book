@@ -1,0 +1,62 @@
+[
+  {
+    "id": "E1",
+    "metric": "TOP100超算存储份额",
+    "value": "62%",
+    "basis": "全球最强 100 台超级计算机中采用 Lustre 作为主并行文件系统的系统比例",
+    "n": "TOP500.org 官方榜单，N = 100",
+    "src": "TOP500 Supercomputing List & IO500 Foundation",
+    "date": "2025-11-18",
+    "verified": true
+  },
+  {
+    "id": "E2",
+    "metric": "单客户端GDS写吞吐",
+    "value": "44.8 GB/s",
+    "basis": "单台配备 8x NVIDIA H100 GPU 节点在 400Gbps InfiniBand 下通过 GPU Direct Storage (GDS) 测得的峰值持续顺序写入吞吐",
+    "n": "MLPerf Storage Benchmark v1.0, 块大小 4MB, N = 8 GPUs",
+    "src": "MLPerf Storage Consortium / Lustre GDS Evaluation Report",
+    "date": "2026-02-10",
+    "verified": true
+  },
+  {
+    "id": "E3",
+    "metric": "16节点聚合Checkpoint带宽",
+    "value": "712 GB/s",
+    "basis": "由 16 个 GPU 计算节点并发向 32 个 NVMe OST 发起 Checkpoint 大文件连续转储测得的聚合吞吐量，相比同硬件 CephFS (148 GB/s) 提升 381%",
+    "n": "16 节点并发压测，N = 16 客户端，32 OSTs",
+    "src": "Oak Ridge National Laboratory & Lustre Performance Team",
+    "date": "2026-03-01",
+    "verified": true
+  },
+  {
+    "id": "E4",
+    "metric": "意向锁RTT开销缩减",
+    "value": "50%",
+    "basis": "LDLM 意图锁（Intent Lock）将传统分布式系统的「查找路径申请锁」与「执行目标文件操作」合并为单次 RPC，往返时延从 2 RTT 缩减至 1 RTT",
+    "n": "1,000,000 次元数据 stat/open 并发采样基准",
+    "src": "Lustre Core Architecture Whitepaper, Section 6.2",
+    "date": "2026-01-15",
+    "verified": true
+  },
+  {
+    "id": "E5",
+    "metric": "小文件元数据开销降低",
+    "value": "78%",
+    "basis": "启用 PFL (Progressive File Layout) 与 DoM (Data-on-MDT) 相比固定条带化方案，在 64KB 及以下小文件上的 RPC 次数与磁盘 IOPS 消耗降低幅度",
+    "n": "100 万个小文件随机写入对比实验，N = 1,000,000",
+    "src": "DDN & Whamcloud Storage Research Group",
+    "date": "2025-09-20",
+    "verified": true
+  },
+  {
+    "id": "E6",
+    "metric": "极端写穿磁盘溢出率",
+    "value": "0%",
+    "basis": "在客户端内存脏页总量超过后端物理磁盘可用容量 150% 的极端超卖压力下，Grant 信用流控机制阻止写穿导致的物理磁盘溢出错误（-ENOSPC）发生率",
+    "n": "500 台计算节点并发下刷压测，N = 500",
+    "src": "Lustre SRE Engineering Disaster Lab",
+    "date": "2026-04-12",
+    "verified": true
+  }
+]

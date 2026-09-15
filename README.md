@@ -130,4 +130,34 @@ Lustre 代码库（[lustre-release](https://github.com/lustre/lustre-release)）
 - [第 23 章：真实生产灾难排查与应急救援手册](part-08-production/23-disaster-recovery.md)
 - [第 24 章：面向 AI 时代的演进与前沿架构 (GDS / DAOS 反思)](part-08-production/24-ai-frontiers.md)
 
-跟随本书，让我们一同推开万核并行计算时代最底层存储基石的源码大门！
+---
+
+## 📑 机构级技术架构白皮书与出版级排版管线 (huashu-report)
+
+本项目全面整合 [huashu-report](https://github.com/alchaincyf/huashu-report) 工业级技术报告设计系统与严谨实证方法论，构建了“专著 + 深度白皮书”双轨发布流水线：
+
+### 1. 全书 mdBook 出版级印刷主题 (`theme/huashu.css`)
+- **微米级排版规范**：采用印刷级灰黑底色（`#231f20`）与经典双色系统（Teal 品牌色 `#14505e` + Clay 强调色 `#a4551f`）。
+- **专业制表与排印**：全局启用等宽数字（`font-variant-numeric: tabular-nums`）、跨页表头自动重复（`thead { display: table-header-group; }`）与孤行/孤字防断保护。
+
+### 2. 独立白皮书管线 (`report/`)
+基于严谨的「数据承重层 + 组装层 + 渲染层」三层架构：
+- **数据承重层 (`report/数据表.json`)**：收录 6 项端到端实证指标（含样本量 $N$、测试口径、基准对比与官方复现出处）。
+- **组装与矢量图表层 (`report/build.py`)**：自动嵌入高精度内联矢量图（`chart.py`），实现结论先行图表标题与实证角标溯源机制（`[E1]`~`[E6]`）。
+- **严谨辩证章节**：严格贯彻“预先反驳自己”学术范式，主动阐明单目录超小文件锁争用瓶颈与内核驱动运维门槛等局限性。
+- **渲染与机械化自检 (`report/render.py`)**：基于 Playwright Chromium 输出毫米级精确 A4 双面白皮书 PDF，并通过 PyMuPDF 进行机械化质量与占位符零容忍自检。
+
+### 3. 一键编译与导出命令
+
+```bash
+# 1. 编译网页版 mdBook
+mdbook build
+
+# 2. 导出 24 章全书高清出版级 PDF
+node scripts/export_pdf.mjs
+
+# 3. 编译并渲染机构级技术架构白皮书 PDF
+python report/render.py
+```
+
+跟随本书与白皮书，让我们一同推开万核并行计算时代最底层存储基石的源码大门！
