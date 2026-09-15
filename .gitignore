@@ -1,0 +1,17 @@
+# mdBook build output
+dist/
+book/
+
+# Dependencies
+node_modules/
+
+# Build artifacts & PDF exports
+*.pdf
+.tmp_*
+*.tmp
+
+# System & Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

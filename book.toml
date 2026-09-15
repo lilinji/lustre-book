@@ -1,0 +1,16 @@
+[book]
+title = "Lustre 分布式文件系统：内核架构、协议演进与工程实战"
+authors = ["Lustre Architecture & Engineering Team"]
+description = "Lustre 分布式文件系统深度剖析：从内核驱动、LNet、LDLM、DNE、PFL/FLR 到 GDS 与生产容灾"
+language = "zh-CN"
+src = "."
+
+[build]
+build-dir = "dist"
+create-missing = false
+
+[output.html]
+git-repository-url = "https://github.com/lustre/lustre-release"
+default-theme = "rust"
+preferred-dark-theme = "coal"
+mathjax-support = true
