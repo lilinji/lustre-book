@@ -6,7 +6,6 @@ book/
 node_modules/
 
 # Build artifacts & PDF exports
-*.pdf
 .tmp_*
 *.tmp
 
