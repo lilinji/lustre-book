@@ -6,6 +6,12 @@
 
 ---
 
+## 🗺️ 全书技术体系与系统全景架构图
+
+![Lustre 分布式文件系统全景技术与章节知识架构图](architecture.svg)
+
+---
+
 ## 序言：为什么需要深入理解 Lustre？
 
 在单机系统中，我们习惯了操作系统的标准 POSIX I/O：调用 `open()` 返回文件描述符，调用 `write()` 将脏页写入 Page Cache，后台 `flusher` 线程异步刷盘。即使是高并发的 Web 场景，单盘几千 IOPS、几个 NVMe SSD 组个 RAID 0，或者挂载一个 NFS 共享存储，也足以应付多数业务。
