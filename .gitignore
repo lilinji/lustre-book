@@ -1,7 +1,7 @@
 # mdBook build output
 dist/
-book/*.pdf
-!book/extracted/**
+# Source PDFs and local extracted materials
+book/
 
 
 # Dependencies
