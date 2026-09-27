@@ -1,301 +1,220 @@
-# 第十一章：DNE（Distributed Namespace Engine）多元数据水平扩展 —— 远端目录、条带化分片与跨节点分布式事务
+# 第 11 章：DNE 多元数据水平扩展与分布式命名空间
 
-> “在分布式存储的演进史中，数据平面的横向扩展（Scale-out）相对简单，增加几十台 OST 服务器即可将存储容量从 PB 扩展到 EB。然而，元数据命名空间是一棵充满因果约束的强一致性树状结构，将其打碎并无缝分散到多个互不相干的独立服务器上，是存储架构界最硬核的挑战。Lustre 的 DNE（Distributed Namespace Engine）架构，彻底粉碎了单元数据服务器的物理天花板。”
-
-在上一章 [MDS 与 MDT 核心架构](10-mdt-internals.md) 中，我们解构了单个 MDT 内部的双轨流水线与意向锁机制。然而，即便是最顶级的双路 128 核高频服务器搭配全闪 NVMe 阵列，单台 MDT 在面对上百亿文件和百万级并发小文件写入时，其内存容量、锁哈希桶以及 Ext4/ZFS 底层索引深度依然会遭遇物理窒息。
-
-本章我们将深入剖析 Lustre 攻克元数据横向扩展的终极武器 —— **DNE（Distributed Namespace Engine）**：
-- DNE 演进三部曲：从 **DNE1（远端目录）** 到 **DNE2（条带化目录）**；
-- 客户端驱动 [`lmv`](https://github.com/lustre/lustre-release/blob/master/lustre/include/lustre_lmv.h) 如何利用 **FNV-1a / CRUSH2 哈希算法** 实现文件名到 MDT 的微秒级免锁直接寻址；
-- 跨 MDT 操作（如跨节点 `rename`）如何通过 **更新日志（Update Log）** 实现分布式两阶段原子提交；
-- 巨型目录不停机在线平滑迁移（`lfs migrate`）的 **双布局迁移状态机**。
+> **本章核心源码文件**：  
+> - `lustre/lmv/lmv_obd.c`：客户端逻辑元数据卷（LMV）驱动与哈希路由实现  
+> - `lustre/include/lustre_lmv.h`：LMV 条带化描述符与目录分片布局定义  
+> - `lustre/mdt/mdt_coordinator.c`：跨 MDT 分布式操作协调器（Coordinator）实现  
+> - `lustre/mdd/mdd_dir.c`：条带化目录（Striped Directory）分片创建与迭代遍历  
+> - `lustre/lod/lod_sub_object.c`：底层跨目标对象更新日志（Update Log）管理  
 
 ---
 
-## 11.1 单 MDT 的物理极限与 DNE 演进三部曲
+## 11.1 单 MDT 的扩展性物理极限与 DNE 演进
 
-### 11.1.1 为什么单 MDT 必死？
+在大规模集群建设中，数据存储容量通常可以通过增加 OST 节点实现线性扩展。然而，元数据命名空间由强因果关系的树状拓扑构成，单台 MDT 在面对超百亿文件与百万级并发操作时会面临物理瓶颈：
+1. **内存缓存瓶颈**：每个打开的文件与缓存的目录项在内存中均占用固定大小的内核对象。当文件规模突破数十亿时，单机物理内存难以完全承载热点元数据，引发频繁的缓存换入换出与磁盘 I/O。
+2. **底层索引深度与锁争用**：单机文件系统（如 ldiskfs 的 Htree）在单目录下文件数量达到千万级时，树深度与索引节点急剧增加，目录项修改时的锁竞争导致处理延迟显著增加。
+3. **CPU 自旋锁饱和**：多核处理器在高频访问相同父目录时，Linux VFS 的目录锁与 Inode 互斥量会消耗大量 CPU 时间在自旋等待上。
 
-在传统的存储集群中，元数据集中在 MDT0 上：
-1. **内存墙（Memory Wall）**：
-   每个打开的文件或缓存目录项在内存中至少占用 1KB 结构体。10 亿个文件需要至少 1TB 的物理 RAM 仅用来做元数据缓存；
-2. **底层单机文件系统索引极限**：
-   ldiskfs（Ext4）的目录基于 Htree 索引，当单个目录文件数突破 1000 万时，树深度达到 4 层以上，每次 `lookup` 或 `create` 引发的磁盘随机读与互斥锁竞争会导致性能断崖式暴跌；
-3. **CPU 锁饱和**：
-   即使为 MDS 配备 128 个 CPU 核心，所有线程在操作同一个父目录时，都会在 Linux VFS 的 `dentry->d_lock` 和 inode 信号量上打满自旋锁，CPU 90% 的算力被白白浪费在空转等待上。
+为此，Lustre 推出了 **DNE（Distributed Namespace Engine，分布式命名空间引擎）** 架构。
 
-### 11.1.2 DNE 演进路径
+![DNE3 多元数据与 FLR 架构演进](../images/roadmap_slide06_dne_flr.png)
 
-```text
-+-------------------------------------------------------------------------------+
-|                       DNE 架构演进阶段对比                                    |
-+-------------------------------------------------------------------------------+
+*图 11-1: Lustre 官方路线图中的 DNE3 分布式多元数据与远程/条带化目录演进（来源：Lustre Roadmap 2019）*
 
-[DNE 1: 远端子目录 (Remote Directories)]
-         MDT 0 (根目录 /)
-         |-- /home  (整个子树物理位于 MDT 1)
-         |-- /work  (整个子树物理位于 MDT 2)
-         \-- /data  (整个子树物理位于 MDT 3)
-=> 优点: 实现了大目录间的隔离分流
-=> 致命缺点: 如果 /data/images 单个目录下有 1 亿个文件，MDT 3 依然被挤爆!
+```mermaid
+flowchart TD
+    subgraph DNE1_Model ["DNE 1: 远端子目录 (Remote Directories)"]
+        R0["MDT 0000 (根目录 '/')"]
+        R1["MDT 0001 (子目录树 '/home')"]
+        R2["MDT 0002 (子目录树 '/work')"]
+        R0 -->|整棵子树物理迁移| R1
+        R0 -->|整棵子树物理迁移| R2
+    end
 
-[DNE 2: 条带化目录 (Striped Directories / Sharded Directory)]
-         MDT 0: 逻辑父目录 /data/images (Master Stripe)
-         |-- Shard 0 (物理存放在 MDT 0, 承载 hash(name)%4 == 0 的文件)
-         |-- Shard 1 (物理存放在 MDT 1, 承载 hash(name)%4 == 1 的文件)
-         |-- Shard 2 (物理存放在 MDT 2, 承载 hash(name)%4 == 2 的文件)
-         \-- Shard 3 (物理存放在 MDT 3, 承载 hash(name)%4 == 3 的文件)
-=> 终极飞跃: 单个超大目录被物理切分为 N 个分片，并发性能随 MDT 数量线性增加!
+    subgraph DNE2_Model ["DNE 2: 条带化目录 (Striped / Sharded Directories)"]
+        M_DIR["逻辑父目录 '/dataset' (Master Stripe 在 MDT 0000)"]
+        S0["Shard 0 (位于 MDT 0000)"]
+        S1["Shard 1 (位于 MDT 0001)"]
+        S2["Shard 2 (位于 MDT 0002)"]
+        S3["Shard 3 (位于 MDT 0003)"]
+        M_DIR --> S0
+        M_DIR --> S1
+        M_DIR --> S2
+        M_DIR --> S3
+    end
 ```
+
+### DNE 演进阶段
+
+1. **DNE 1（远端子目录）**：支持将不同的目录子树独立存放在指定的 MDT 上（例如 `/home` 物理位于 MDT0001，`/data` 物理位于 MDT0002）。其局限在于：如果单一目录下包含数千万个文件，该单目录依然只能落在单个 MDT 上。
+2. **DNE 2（条带化目录）**：支持将单个巨型目录本身切分为多个分片（Shards），目录下的子文件根据文件名哈希值打散分布在不同的 MDT 上，实现了单目录并发性能随 MDT 数量线性扩展。
+3. **DNE 3（动态拆分与在线迁移）**：支持根据目录内文件数量自动触发分片拆分（Auto-split），并支持在文件系统不停机状态下将现有目录在线平滑迁移至其他 MDT（`lfs migrate -m`）。
 
 ---
 
-## 11.2 目录条带化核心算法与哈希策略
+## 11.2 目录条带化核心算法与 LMV 哈希机制
 
-在 DNE2 中，一个被条带化的巨型目录被抽象为一个 **分片对象（Sharded Object）**：
-- **Master Stripe（主分片）**：在 MDT 上持有真实的目录 Inode，记录目录的默认权限、属主以及目录条带布局（LMV EA）；
-- **Slave Stripes（从分片）**：分布在各个指定的 MDT 上，每个分片在底层磁盘上就是一个普通的 Ext4/ZFS 子目录，用于分散存储真实的文件目录项（dentry）。
+在条带化目录中，目录在逻辑上被划分为 **主分片（Master Stripe）** 与多个 **从分片（Slave Stripes）**：
+- **主分片**：存放该目录的主 Inode，记录目录权限、属主以及扩展属性中的 LMV 条带布局（LMV EA）。
+- **从分片**：分布在指定的一组 MDT 上，底层对应各 MDT 上的实际子目录，用于分散存储真实的文件目录项（dentry）。
 
-### 11.2.1 哈希算法：客户端 LMV 零开销寻址
+```mermaid
+flowchart TD
+    CLI["客户端发起文件创建 / Lookup<br/>目标: /dataset/sample_001.bin"]
+    LMV["客户端 LMV 驱动层"]
+    HASH["计算文件名哈希: h = FNV_1a('sample_001.bin')<br/>计算目标分片: stripe_index = h % stripe_count"]
+    
+    TGT0["MDT 0000 (分片 0)"]
+    TGT1["MDT 0001 (分片 1)"]
+    TGT2["MDT 0002 (分片 2)"]
+    TGT3["MDT 0003 (分片 3)"]
 
-当客户端调用 `open("/mnt/lustre/images/car_001.jpg")` 时，客户端如何知道 `car_001.jpg` 应该去哪台 MDT 创建或查找？
-如果在客户端去轮询所有的 MDT，网络开销将是灾难性的。
-
-Lustre 客户端的 **LMV（Logical Metadata Volume）驱动** 在本地运行确定性的哈希函数，查看源码 [`lustre/include/lustre_lmv.h:350`](https://github.com/lustre/lustre-release/blob/master/lustre/include/lustre_lmv.h#L350)：
-
-```c
-/* lustre/include/lustre_lmv.h */
-switch (hash_type & LMV_HASH_TYPE_MASK) {
-case LMV_HASH_TYPE_FNV_1A_64:
-	stripe_index = lmv_hash_fnv1a(stripe_count, name, namelen);
-	break;
-case LMV_HASH_TYPE_CRUSH:
-	stripe_index = lmv_hash_crush(stripe_count, name, namelen, false);
-	break;
-case LMV_HASH_TYPE_CRUSH2:
-	stripe_index = lmv_hash_crush(stripe_count, name, namelen, true);
-	break;
-...
-}
+    CLI --> LMV
+    LMV --> HASH
+    HASH -->|假设计算命中分片 2| TGT2
 ```
 
-```text
-+-------------------------------------------------------------------------------+
-|                       LMV 客户端本地哈希直接路由机制                          |
-+-------------------------------------------------------------------------------+
+### 11.2.1 哈希算法：客户端免中心寻址
 
-文件名: "car_001.jpg"
-           |
-           v
-[客户端本地执行 FNV-1a 或 CRUSH2 哈希算法]
-hash = lustre_hash_fnv_1a_64("car_001.jpg", 11);
-stripe_index = hash % stripe_count; // 假设 stripe_count = 4, 结果 = 2
-           |
-           v
-[查询 LMV 布局表: stripe_index 2 对应 MDT 2]
-           |
-           v
-[客户端直接跳过 MDT0/1/3，通过 Portal 12 向 MDT 2 发起 IT_OPEN RPC!]
-耗时: 本地 CPU 计算仅 20 纳秒，网络往返精准直达，无任何额外转发开销!
-```
+客户端的 `lmv` 模块在解析目录条带布局后，利用哈希算法在本地直接计算文件所属的目标分片：
 
-### 11.2.2 惊艳的 CRUSH2 算法：临时文件后缀免疫
-
-在真实业务中，海量工具（如 `vim`、`rsync`、`dcp`）在写入文件时，往往会先创建一个临时文件，写完后再执行原子重命名：
-`test.dat.tmp.1234` $\to$ `rename` $\to$ `test.dat`。
-
-如果使用常规的 FNV-1a 哈希，`test.dat.tmp.1234` 和 `test.dat` 的哈希值截然不同，极大概率会被散列到两台不同的 MDT 上！这意味着一个普通的写入保存动作，在底层被强行升级为极其昂贵、脆弱的 **跨 MDT 跨节点原子重命名事务**！
-
-Lustre 创造了 **`LMV_HASH_TYPE_CRUSH2` 算法**（[`lustre/include/lu_object.h:1289`](https://github.com/lustre/lustre-release/blob/master/lustre/include/lu_object.h#L1289)）：
-```c
-/**
- * lu_name_is_temp_file() - 智能剥离临时后缀算法
- * 针对以点开头或特定结尾的临时文件名，CRUSH2 会自动剥离其动态后缀，
- * 仅对文件的核心主干名称计算哈希值！
- */
-```
-无论编辑器生成了怎样的临时后缀，临时文件与最终文件在第一天就**保证散列到同一台物理 MDT 的同一个分片上**，将潜在的跨节点重命名降维为纯粹的单机局部事务！
+1. **哈希计算**：采用经过优化的 FNV-1a 或 CRUSH 算法，对文件名字符串进行哈希运算生成 32 位整型散列值。
+2. **分片定位**：
+   $$\text{StripeIndex} = \text{Hash}(\text{filename}) \pmod{\text{StripeCount}}$$
+3. **直接通信**：根据 `StripeIndex` 查询 LMV 布局中的对应 MDT 编号，直接向目标 MDT 发起元数据 RPC。整个寻址过程在客户端本地内存完成，不经过 Master MDT 中转，消除了中心节点的通信开销。
 
 ---
 
-## 11.3 跨 MDT 强一致性与分布式事务机制
+## 11.3 跨 MDT 分布式操作与更新日志（Update Log）
 
-当用户执行跨目录的 `rename("/mdt1_dir/fileA", "/mdt2_dir/fileB")` 时，涉及两个完全独立节点上的物理文件系统修改。
-在分布式系统中，经典方案是两阶段提交（2PC），但 2PC 在高并发下的阻塞锁会导致严重的吞吐衰竭。
+在多元数据环境下，某些 POSIX 操作涉及跨不同 MDT 的状态协同（例如：将文件从 MDT0001 的目录移动到 MDT0002 的目录下，即跨节点 `rename`）。这类操作若发生中途断电或网络超时，极易产生单边孤儿文件或目录树撕裂。
 
-Lustre 采用了一套基于 **分布式更新日志（Update Log）** 与 **失步自愈恢复（Out-of-Sync Recovery）** 的工程架构：
+Lustre 实现了基于 **更新日志（Update Log / OUT 机制）** 的分布式两阶段提交协议：
 
-```text
-+-------------------------------------------------------------------------------+
-|                       跨 MDT 事务与更新日志协同机制                          |
-+-------------------------------------------------------------------------------+
+```mermaid
+sequenceDiagram
+    participant C as 客户端 (Client)
+    participant M1 as 协调方 MDT 0001 (源目录所在节点)
+    participant M2 as 参与方 MDT 0002 (目标目录所在节点)
 
-Client                                  MDT 1 (源节点)                  MDT 2 (目标节点)
-  |                                           |                               |
-  |--- (1) 发送跨节点重命名 RPC -------------->|                               |
-  |                                   [开启本地事务 th]                       |
-  |                                   [在父目录解绑 fileA]                     |
-  |                                   [向 Update Log 写入跨节点待办记录]       |
-  |                                           |                               |
-  |                                           |--- (2) 通过 OSP 下发更新指令 ->|
-  |                                           |        (包含原事务 transno)   | [开启本地事务]
-  |                                           |                               | [在目标目录插入 fileB]
-  |                                           |                               | [更新 LMA 反向指针]
-  |                                           |<-- (3) 确认完成 (Ack) --------|
-  |                                   [在本地提交事务]                         |
-  |<-- (4) 重命名成功应答 --------------------|                               |
+    C->>M1: 发起跨节点重命名 RPC (rename /dir1/A -> /dir2/B)
+    Note over M1: M1 充当分布式事务协调者 (Coordinator)<br/>1. 开启本地事务，在 Update Log 中记录待执行操作
+    M1->>M2: 2. 发送分布式子更新 RPC (OUT_UPDATE)<br/>要求 M2 在目标目录创建目标项 B 并链接到文件 FID
+    Note over M2: M2 校验权限，在本地执行写入并返回确认
+    M2-->>M1: 3. 返回执行就绪应答
+    Note over M1: 4. M1 在本地目录树中删除源项 A，持久化事务提交
+    M1-->>C: 5. 向客户端返回成功应答
+    Note over M1: 后台异步清理 Update Log，事务彻底闭合
 ```
 
-### 11.3.1 崩溃自愈：失步恢复（Out-of-Sync Recovery）
-
-如果 MDT 1 刚向 MDT 2 发出了指令，MDT 1 物理断电或者网络中断，系统会不会出现“源文件已删，目标文件未建”的丢数据惨剧？
-
-1. **分布式更新日志持久化**：
-   MDT 1 在执行操作前，必须将该跨节点更新操作先写入本地磁盘特殊的 LLOG 容器（`FID_SEQ_UPDATE_LOG`）中；
-2. **OSP 自动追平机制**：
-   MDT 1 重启后，其内部针对 MDT 2 的代理驱动（`osp_device`）会扫描未完成的 Update Log 队列，自动向 MDT 2 重新同步未确认的操作；
-3. **版本屏障（VBR 验证）**：
-   MDT 2 在执行补偿重放时校验对象的版本指纹。如果网络瞬断导致操作重复到达，MDT 2 依靠幂等性直接确认，彻底规避了分布式脑裂与孤儿对象产生。
+- **协调者机制**：接收请求的 MDT 充当事务协调者（Coordinator），在本地持久化记录分布式操作的预备日志（Update Log）。
+- **幂等子事务**：协调者通过专用的内部 RPC 向远程参与方下发子更新命令。
+- **故障重放恢复**：若协调者或参与方在执行过程中发生崩溃，重启后的恢复流程会扫描未提交的 Update Log，向参与方重新推进或回滚操作，保证跨 MDT 操作的原子性。
 
 ---
 
-## 11.4 目录在线平滑扩容与热迁移（Dir Migration）
+## 11.4 目录在线平滑迁移（Directory Migration）
 
-### 11.4.1 生产痛点：目录建小了怎么办？
+当集群扩容新增了 MDT，或者某一特定目录因数据量暴增导致原有 MDT 空间告急时，管理员可以使用 `lfs migrate -m` 命令将目录在线迁移至其他 MDT，业务读写全程不中断。
 
-在实际生产中，用户最初可能觉得某个目录只会存 10 万个文件，于是创建了一个单分片目录（仅在 MDT0 上）。
-半年后，该目录文件暴增到 3000 万，MDT0 发生严重读写倾斜告警。
-如果必须停止所有上层业务、复制文件、重建目录，在 7x24 小时运行的 AI 训练和气象超算中是不可接受的。
-
-Lustre 提供了革命性的 **在线热迁移机制（Online Directory Migration）**。
-
-### 11.4.2 双布局迁移状态机（Migrating Layout）
-
-查看 [`lustre/include/lustre_lmv.h:340`](https://github.com/lustre/lustre-release/blob/master/lustre/include/lustre_lmv.h#L340)，LMV 支持在目录迁移期间维持一个特殊的中间状态：
-
-```c
-/* lustre/include/lustre_lmv.h */
-} else if (lmv_hash_is_migrating(hash_type)) {
-	/* 目录正处于在线热迁移状态! */
-	if (new_layout) {
-		stripe_count = migrate_offset; // 新增写入流使用新布局分片
-	} else {
-		hash_type = migrate_hash;      // 存量读取流使用旧布局分片
-	}
-}
+```mermaid
+stateDiagram-v2
+    [*] --> PREPARE: 触发 lfs migrate -m <target_mdts>
+    
+    PREPARE --> DUAL_ROUTING: 在目标 MDT 创建全新分片，设置双布局路由
+    
+    DUAL_ROUTING --> DATA_COPY: 后台线程逐批扫描旧分片目录项，迁移至新分片
+    
+    DATA_COPY --> CUTOVER: 所有目录项迁移完毕，进行原子状态切换
+    
+    CUTOVER --> CLEANUP: 将旧分片标记为待删除，销毁旧 Inode
+    
+    CLEANUP --> [*]: 迁移完成，新布局正式接管
 ```
 
-```text
-+-------------------------------------------------------------------------------+
-|                       DNE 目录在线热迁移 (Migration) 状态机                   |
-+-------------------------------------------------------------------------------+
-
-[初始状态: 单分片目录 (仅在 MDT 0 上)]
-=================================================================================
-管理员发起在线扩容: lfs migrate -m 0,1,2,3 /mnt/lustre/bigdir
-=================================================================================
-  |
-  +-> 1. 目录被原子打上 LMV_HASH_FLAG_MIGRATION 标记 (进入双布局状态!)
-  |
-  +-> 2. 读写分流:
-  |      - 新创建的文件: 强制按 4 个 MDT 的新布局进行 FNV-1a 散列!
-  |      - 存量老文件: 依然能从旧分片正常读取并更新!
-  |
-  +-> 3. 后台迁移守护进程:
-  |      逐一遍历老分片中的文件，透明迁移到新分片对应的 MDT 上。
-  |
-  +-> 4. 存量全部迁移完毕:
-         原子清除 MIGRATION 标记，目录正式转为全新 4 分片架构!
-=================================================================================
-全过程无需卸载文件系统、上层正在跑的 Python/C++ 读写程序零报错、零中断!
-```
+1. **预备与双布局路由（Dual Routing）**：在目标 MDT 上分配新的目录分片，并在主 Inode 上挂载过渡态布局标记。在此阶段，客户端发起的新文件创建直接路由至新分片，旧文件的读取仍可回溯至旧分片。
+2. **后台迭代数据搬迁**：内核工作线程以批次为单位，遍历旧目录下的目录项，通过内部事务将其安全移动至新分片中。
+3. **原子切换（Cutover）**：当旧分片全部排空后，系统原子更新主分片的 LMV EA 布局，彻底解除对旧分片的引用并释放底层空间。
 
 ---
 
-## 11.5 生产实战：巨型目录倾斜排查与 DNE 最佳实践
+## 11.5 生产实战：参数调优与监控指标
 
-### 11.5.1 现场故障复盘：元数据“一核有难，众核围观”
-
-某自动驾驶科技公司，部署了 4 台 MDT（MDT0000 ~ MDT0003）。
-但在生产运行中，监控发现 MDT0000 的 NVMe 磁盘已使用 97% 并频发报警，而 MDT0001 ~ MDT0003 的磁盘使用率只有不到 5%！
-整个集群的吞吐被活生生卡死在 MDT0000 上。
-
-### 11.5.2 诊断排查命令链
-
-运维团队利用 Lustre 强大的诊断命令迅速摸清了真相：
+### 11.5.1 目录条带化常用操作命令
 
 ```bash
-# 1. 检查根目录及核心业务目录的条带化配置
-lfs getdirstripe -v /mnt/lustre/dataset
-## 11.5 真实生产事故复盘：跨 MDT 目录条带热点倾斜与跨节点分布式事务挂死
+# 1. 创建一个跨 4 个 MDT 条带化的目录 (采用默认哈希)
+lfs mkdir -c 4 /mnt/lustre/striped_dir
 
-### 11.5.1 事故现场：MDT0 撑死与 MDT1~7 闲置
+# 2. 指定从特定 MDT 开始轮询条带化
+lfs mkdir -i 1 -c 3 /mnt/lustre/striped_dir2
 
-某智算中心部署了 8 台 MDS 节点（DNE 架构），计划承载 5,000 万规模的计算机视觉图片数据集。
-然而，在数据灌入仅 3 天后，管理员收到紧急告警：`MDT0000 Inode 使用率达 99.8%`，而其余 `MDT0001 ~ MDT0007` 的 Inode 使用率不足 2%！
-与此同时，部分用户在执行跨目录批量文件 `mv` 重命名操作时，客户端进程长时间陷入 D 状态无法返回。
+# 3. 查看目录当前的条带布局信息
+lfs getdirstripe -d /mnt/lustre/striped_dir
 
-### 11.5.2 排查过程与根因定位
-1. **目录条带配置排查**：
-   运行 `lfs getdirstripe` 查看业务根目录：
+# 4. 在线将现有目录迁移到 MDT0002 和 MDT0003
+lfs migrate -m 2,3 /mnt/lustre/old_dir
+```
+
+### 11.5.2 常用状态监控与指标查看
+
+| 监控目的 | 执行命令 | 输出关注重点 |
+| :--- | :--- | :--- |
+| **监控各 MDT 的负载均衡度** | `lctl get_param mdt.*.filesfree` | 观察各 MDT 剩余 Inode 数量，避免局部 MDT 空间耗尽。 |
+| **查看 Update Log 事务队列** | `lctl get_param osp.*.update_log` | 检查是否有长期未提交的跨 MDT 分布式日志堆积。 |
+| **监控目录迁移进度** | `lctl get_param mdd.*.migrate_status` | 监控后台在线迁移的数据搬迁速率与剩余条目。 |
+
+---
+
+## 11.6 生产事故案例：跨 MDT Update Log 堆积引发分布式重命名挂起与 MDS 内存溢出
+
+### 11.6.1 故障现象
+
+某国家级气象预报计算集群配置了 4 台全闪 MDS 节点。在运行海量预报格点文件生成作业时，计算脚本频繁在属于不同 MDT 的目录之间执行 `mv`（跨 MDT rename）操作。
+
+运行约 4 小时后，所有涉及跨目录重命名的应用进程全部陷入 D 状态（不可中断睡眠），MDT0000 节点的可用内存持续下降直至触发 OOM（Out-Of-Memory），控制台连续打印如下告警：
+```text
+LustreError: 8765:0:(lod_sub_object.c:842:lod_sub_declare_create()) OSP testfs-MDT0002-osp-MDT0000: out of update log slots!
+Lustre: testfs-MDT0000: transaction stalled waiting for update log commit
+```
+
+### 11.6.2 排查过程
+
+1. **日志队列检查**：  
+   在协调者 MDT0000 上检查与各参与方之间的 OSP（Object Storage Proxy）连接状态：
    ```bash
-   lfs getdirstripe -v /mnt/lustre/dataset
-   # lmv_stripe_count: 1 lmv_stripe_offset: 0 lmv_hash_type: none
-   ```text
-   **破案一**：用户直接在根目录下创建了普通目录，默认单分片，所有元数据全部分配在主 MDT 0 上，DNE 多元数据集群退化为单机系统。
-2. **跨节点事务死锁排查**：
-   通过 `lctl get_param mdt.MDT*.update_log` 查看更新日志，发现多台客户端在并发执行从 `/mnt/lustre/dir_a`（位于 MDT 1）移动文件到 `/mnt/lustre/dir_b`（位于 MDT 2）的操作。
-   由于源文件与目标目录位于不同的物理 MDT 上，`rename` 触发了跨节点分布式两阶段事务。此时客户端持有了 MDT 1 上的原目录 IBITS 锁，在向 MDT 2 申请新目录 IBITS 锁时发生了逆序死锁竞争，导致 `mdt_dist_txn` 事务队列挂死。
+   lctl get_param osp.*.update_seq
+   ```
+   **排查发现**：MDT0000 发往 MDT0002 的 Update Log 堆积了超过 100,000 条未确认记录，事务槽位（Slots）彻底耗尽。
 
-### 11.5.3 生产热修复与 DNE 架构黄金法则
-针对该事故，团队执行了在线热迁移平摊并制定了严密架构准则：
+2. **根本原因定性**：  
+   - 检查参与方 MDT0002 的网络状态，发现该节点与 MDT0000 之间的 LNet 链路由于网卡驱动中断亲和性配置不当，在处理极端高并发内部 RPC 时发生了丢包；
+   - 协调者 MDT0000 发出的 `OUT_UPDATE` 子请求未能在超时时限内收到应答；
+   - 协调者在等待远端确认期间，将后续所有的跨 MDT 重命名请求全部暂存在内核内存队列中，导致内存被未完结的上下文结构体挤占，最终触发 OOM 宕机。
 
-```bash
-# 1. 紧急对倾斜的目录执行全量在线热迁移，自动打散到 8 台 MDT 上
-lfs migrate -m 0,1,2,3,4,5,6,7 /mnt/lustre/dataset
+### 11.6.3 修复措施与成效
 
-# 2. 为未来新建目录设置默认分片继承规则
-lfs setdirstripe -D -c 8 /mnt/lustre/dataset
-```text
+1. **临时应急处置**：  
+   重启故障通信链路，并在协调方上提高分布式更新的并发处理配额与超时重传限制：
+   ```bash
+   lctl set_param osp.*.max_rpcs_in_flight=64
+   ```
+2. **优化作业目录布局策略**：  
+   推动气象作业团队优化数据落盘路径，确保高频重命名的源目录与目标目录归属于同一条带化父目录或同一 MDT，消除无谓的跨节点强一致事务交互。
 
----
-
-## 11.6 DNE 架构配置与水平扩展 Checklist
-
-在部署和维护 DNE 多元数据服务器集群时，必须逐一核对以下配置：
-
-- [ ] **默认目录条带化策略合理性（Striping Balance）**：
-  严禁将所有目录盲目设为全分片（如 `c=16`）。小目录（文件数 < 1,000）保持 `c=1` 避免多次网络 RPC；百万级以上的大型数据集根目录，显式设置分片数等于 MDT 物理数量（如 `c=4` 或 `c=8`）。
-- [ ] **哈希散列算法选择（FNV-1a vs CRUSH2）**：
-  纯高频创建与查找的大目录优先选择 `fnv_1a_64`；若目录中充斥大量训练过程中的临时文件（以 `.tmp`、`.crdownload` 结尾后改名），必须选择 `crush2` 散列，免疫临时文件 rename 导致的跨分片物理搬迁。
-- [ ] **跨 MDT 事务超时时间（dist_txn_timeout）调优**：
-  核查 `/proc/fs/lustre/mdt/MDT*/dist_txn_timeout`。在大规模跨节点重命名和链接场景下，将其从默认值微调至 30~60 秒，为网络瞬态延迟与锁协调留出充足安全裕量。
-- [ ] **在线热迁移并发流控（lfs migrate）**：
-  在生产活跃期执行 `lfs migrate` 时，切忌无限制并发，建议通过脚本按批次、低线程限速迁移，防止占用过多 MDT 日志锁引起正常业务延迟抖动。
-- [ ] **MDT 间网络全互联健康度核查**：
-  DNE 强依赖所有 MDT 之间的高速 LNet 直连。确认所有 MDT 的 NID 均已加入对端 Peer 白名单，并且 MTU 保持一致。
+调整后，Update Log 积压在 10 秒内被完全清空，跨目录操作延迟恢复至正常微秒级别。
 
 ---
 
-## 11.7 核心源码对照表
+## 11.7 运维基线检查清单
 
-| 核心抽象 / 模块 | 源码文件 | 关键函数 / 数据结构 | 架构功能与生产定位 |
-| :--- | :--- | :--- | :--- |
-| **客户端条带调度** | [`lmv_obd.c`](https://github.com/lustre/lustre-release/blob/master/lustre/lmv/lmv_obd.c) | `lmv_locate_mds()`, `lmv_name_to_stripe_index()` | 客户端根据文件名哈希免锁定位目标 MDT |
-| **哈希算法集合** | [`lustre_lmv.h`](https://github.com/lustre/lustre-release/blob/master/lustre/include/lustre_lmv.h) | `lmv_hash_fnv1a()`, `lmv_hash_crush()` | FNV-1a、CRUSH 与临时文件免疫的 CRUSH2 散列 |
-| **服务端条带分配** | [`lod_dir.c`](https://github.com/lustre/lustre-release/blob/master/lustre/lod/lod_dir.c) | `lod_dir_striping_create()` | 在 MDT 本地创建 Master 目录并协同创建 Slave 分片 |
-| **跨节点更新日志** | [`mdt_updates.c`](https://github.com/lustre/lustre-release/blob/master/lustre/mdt/mdt_updates.c) | `mdt_dist_txn_start()`, `mdt_update_log_add()` | 跨 MDT 事务与分布式 Update Log 原子提交中枢 |
-| **在线热迁移** | [`mdt_reint.c`](https://github.com/lustre/lustre-release/blob/master/lustre/mdt/mdt_reint.c) | `mdt_reint_migrate()` | 处理 `lfs migrate` 请求与双布局状态机切换 |
+- [ ] **合理规划目录条带数（Stripe Count）**：普通目录无需开启条带化（默认保持单分片）；仅对预计存放超过 100 万个文件的大型共享目录配置条带化（通常设为 4 或 8 分片），避免盲目过度条带化造成元数据碎片。
+- [ ] **MDT 间网络互联保障**：DNE 架构下各 MDS 节点之间的内部互联带宽必须与外部客户端带宽保持同等规格（如专网 200Gb/s IB 直连），防止节点间通信拥塞。
+- [ ] **定期监控 Update Log 队列水位**：将 `osp.*.update_log` 的在途深度纳入监控指标，一旦出现持续增长，立即预警排查网络抖动或远端节点负载。
 
 ---
 
-## 11.7 本章小结
+## 本章小结
 
-在本章中，我们见证了 Lustre 元数据横向扩展架构的宏伟设计：
-1. **DNE2 条带化目录** 将单个不可分割的巨型目录，化整为零打碎在多个物理 MDT 之上，彻底粉碎了单机性能墙；
-2. **客户端 LMV 免锁直接路由** 借助 FNV-1a 和专为工程优化的 CRUSH2 算法，在数十纳秒内直接命中物理目标，消除了任何集中路由代理的开销；
-3. **分布式更新日志与失步自愈恢复** 解决了跨节点事务的原子性与高可用；
-4. **双布局热迁移机制** 让数十亿文件的物理拓扑重塑可以在生产业务零停顿的状态下无感完成！
-
-但是，在如此庞大、并发激烈的元数据洪流中，外部系统（如数据备份工具、归档分层 HSM 系统、安全合规审计引擎）如何才能精确感知文件系统里每时每刻发生的变化？
-在下一章 [第十二章：元数据变更日志（Changelogs）与数据保护](12-changelogs.md) 中，我们将深入剖析 Lustre 赖以支撑企业级安全合规与异构数据分层的核心基石 —— **Changelogs 引擎与 LLOG 环形日志机制**！
+DNE 架构通过多元数据服务器横向扩展，打破了传统单 MDS 的性能与容量天花板。通过 DNE1 远端子目录与 DNE2 条带化目录技术，系统能够将单目录下的海量文件打散至多个物理分片上并行处理；客户端 LMV 驱动通过 FNV-1a / CRUSH 哈希算法实现了零网络开销的本地直接寻址；通过基于 Update Log 的分布式更新协议保障了跨节点复杂操作的事务原子性；配合在线平滑迁移机制，为海量文件的动态再平衡提供了弹性支撑。

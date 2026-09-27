@@ -1,403 +1,285 @@
-# 第六章：LDLM 分布式锁管理器与意向锁 —— 细粒度并发、AST 异步通信与 1-RTT 意向革命
+# 第 6 章：LDLM 分布式锁管理器：意图锁与并发控制深度解密
 
-> “在单机操作系统中，互斥锁与读写锁依靠 CPU 原子指令与内存总线仲裁，耗时不过数纳秒。但在拥有上万节点的超算集群中，如果每次并发访问都要经过多轮网络往返来协商分布式锁，系统的 IOPS 将不可避免地退化至原始时代。Lustre 的分布式锁管理器（LDLM）通过范围锁、字段锁、三大异步 AST 神经网以及首创的‘意向锁（Intent Lock）’，完成了分布式存储史上最壮丽的并发性能革命。”
-
-在前面的章节中，我们深入剖析了 [Portal RPC 管道](04-portal-rpc.md) 与 [自适应超时/恢复状态机](05-recovery-at.md)。本章我们将进入 Lustre 维持全局数据一致性与实现极速并发的核心殿堂 —— **Lustre Distributed Lock Manager (LDLM)**。
-
-我们将彻底拆解：
-- 为什么单机锁模型无法直接搬到分布式系统？
-- 涵盖区间并发写入的 **范围锁（EXTENT）** 与多维度属性解耦的 **字段锁（IBITS）**；
-- 将传统 5 次网络往返（5 RTT）暴力压缩至 1 次的 **意向锁（Intent Lock）**；
-- 支撑分布式无缝协同的 **三大 AST（Blocking, Completion, Glimpse）** 异步回调机制；
-- 避免集群内存被海量锁挤爆的 **动态锁收缩（SLV）与 LRU 机制**。
+> **本章核心源码文件**：  
+> - `include/uapi/linux/lustre/lustre_idl.h`：LDLM 锁模式、锁类型与意向操作码定义  
+> - `lustre/include/lustre_dlm.h`：锁管理器核心命名空间、资源实体与锁结构声明  
+> - `lustre/ldlm/ldlm_lock.c`：分布式锁生命周期、状态迁移与队列流转实现  
+> - `lustre/ldlm/ldlm_resource.c`：资源哈希表管理、冲突判定与兼容性矩阵计算  
+> - `lustre/ldlm/ldlm_request.c`：意图锁（Intent Lock）协议交互与 AST 异步回调处理  
 
 ---
 
-## 6.1 分布式锁的核心抽象与锁模式兼容性矩阵
+## 6.1 分布式锁的核心拓扑与兼容性矩阵
 
-### 6.1.1 核心三元组：Namespace、Resource 与 Lock
+在单机操作系统中，互斥锁与读写锁通常直接内嵌在 `struct inode` 中，通过 CPU 原子指令与本地内存总线实现仲裁。但在分布式存储系统中，锁管理必须与底层物理数据存储解耦，支持跨万级节点的并发协同。
 
-在单机内核中，锁通常直接嵌入在 `struct inode` 中。但在分布式文件系统中，锁的管理必须与物理数据解耦。
-LDLM 建立了严格的三层拓扑抽象：
+LDLM（Lustre Distributed Lock Manager）建立了三层层次化管理模型：
 
-```text
-+-------------------------------------------------------------------------------+
-|                       LDLM 核心三层拓扑抽象                                   |
-+-------------------------------------------------------------------------------+
+```mermaid
+flowchart TD
+    subgraph Namespace_Layer ["命名空间层 (ldlm_namespace)"]
+        NS_MDT["MDT 锁命名空间 (MDT0000)"]
+        NS_OST["OST 锁命名空间 (OST0000)"]
+    end
 
-                             struct ldlm_namespace
-                           (命名空间：MDT 或 OST 独占)
-                                       |
-         +-----------------------------+-----------------------------+
-         |                                                           |
-         v                                                           v
-struct ldlm_resource                                        struct ldlm_resource
-(资源：由 128位 FID 标识)                                   (资源：对应特定文件或目录)
-         |                                                           |
-  +------+------+                                                    |
-  |             |                                                    |
-  v             v                                                    v
-Granted 队列  Waiting 队列                                         ...
-  |             |
-  v             v
-struct ldlm_lock (锁实体：持有者 Client NID, Mode, Extent/IBits, AST 指针)
+    subgraph Resource_Layer ["资源实体层 (ldlm_resource)"]
+        RES_DIR["目录资源 (由 FID 标识)"]
+        RES_FILE["文件数据资源 (由 FID 标识)"]
+    end
+
+    subgraph Queue_Layer ["锁队列层 (三向队列组织)"]
+        GQ["lr_granted: 当前已生效持有的锁链表"]
+        WQ["lr_waiting: 因模式或范围冲突等待排队的锁链表"]
+        CQ["lr_converting: 正在申请模式升级或降级的锁链表"]
+    end
+
+    subgraph Lock_Layer ["锁实体 (ldlm_lock)"]
+        L1["客户端 A: LCK_PR (读锁)"]
+        L2["客户端 B: LCK_PW (写锁)"]
+    end
+
+    NS_MDT --> RES_DIR
+    NS_OST --> RES_FILE
+    RES_FILE --> GQ
+    RES_FILE --> WQ
+    RES_FILE --> CQ
+    GQ --> L1
+    WQ --> L2
 ```
 
-1. **`struct ldlm_namespace`（命名空间）**：
-   每个服务端（每个 MDT、每个 OST）维护独立的锁命名空间，负责该 Target 上所有锁的生命周期、并发队列与内存配额；
-2. **`struct ldlm_resource`（锁资源）**：
-   由一个 128 位的资源名称 `struct ldlm_res_id` 唯一标识（在 Lustre 2.x 中通常直接对应文件的全局唯一标识符 FID）；
-3. **`struct ldlm_lock`（锁实体）**：
-   记录实际的锁状态。每个 Resource 内部维护三个双向链表：
-   - **`lr_granted`（已授予队列）**：当前没有任何冲突、正在被客户端生效持有的锁；
-   - **`lr_waiting`（等待队列）**：因模式或范围冲突、尚未被授予的排队锁；
-   - **`lr_converting`（转换队列）**：正在申请锁模式升级或降级的锁。
+### 6.1.1 核心数据结构
 
-### 6.1.2 锁模式定义与兼容性矩阵（Compatibility Matrix）
+1. **`struct ldlm_namespace`（命名空间）**：  
+   每个服务端（每个 MDT、每个 OST）维护专属的命名空间，负责管理该存储目标上所有锁资源的生命周期、内存缓存配额与并发哈希表。
+2. **`struct ldlm_resource`（锁资源）**：  
+   由全局唯一的 128 位资源标识 `struct ldlm_res_id`（通常对应文件的 FID）定位。每个资源内部维护三个双向链表：
+   - **`lr_granted`**：当前已被授予、正在被各客户端正常持有的锁链表。
+   - **`lr_waiting`**：与现有已授予锁存在模式或范围冲突、处于排队等待状态的锁链表。
+   - **`lr_converting`**：正在申请升级（如由读锁申请升级为写锁）或降级的锁链表。
+3. **`struct ldlm_lock`（锁实体）**：  
+   表示一把具体的锁，记录其持有者客户端 NID、锁模式（Mode）、锁覆盖的范围或字段位图，以及异步通知回调函数指针。
 
-查看源码 [`include/uapi/linux/lustre/lustre_idl.h`](https://github.com/lustre/lustre-release/blob/master/include/uapi/linux/lustre/lustre_idl.h#L2596-L2608)：
+### 6.1.2 锁模式定义与兼容性矩阵
+
+在 `include/uapi/linux/lustre/lustre_idl.h` 中，LDLM 定义了如下锁模式（`enum ldlm_mode`）：
 
 ```c
 enum ldlm_mode {
-	LCK_EX		= 1,	/* 独占锁 (Exclusive Lock) */
-	LCK_PW		= 2,	/* 写锁 (Protected Write) */
-	LCK_PR		= 4,	/* 读锁 (Protected Read) */
-	LCK_CW		= 8,	/* 并发写 (Concurrent Write) */
-	LCK_CR		= 16,	/* 并发读 (Concurrent Read) */
-	LCK_NL		= 32,	/* 空锁 (Null Lock，无冲突) */
-	LCK_GROUP	= 64,	/* 组锁 (Group Lock，跨进程协作) */
-	LCK_COS		= 128,	/* 提交时提交锁 (Commit-on-Share) */
+    LCK_EX      = 1,    /* 独占锁 (Exclusive Lock) */
+    LCK_PW      = 2,    /* 写锁 (Protected Write) */
+    LCK_PR      = 4,    /* 读锁 (Protected Read) */
+    LCK_CW      = 8,    /* 并发写 (Concurrent Write) */
+    LCK_CR      = 16,   /* 并发读 (Concurrent Read) */
+    LCK_NL      = 32,   /* 空锁 (Null Lock，无冲突) */
+    LCK_GROUP   = 64,   /* 组锁 (Group Lock，跨进程协作) */
+    LCK_COS     = 128,  /* 提交时共享锁 (Commit-on-Share) */
 };
 ```
 
-当一个新锁申请访问某个 Resource 时，服务端根据下表判定其是否能直接进入 `lr_granted`，还是必须挂起进入 `lr_waiting`：
+当新锁申请加入某一资源时，服务端根据下述兼容性矩阵进行冲突判定：
 
-```text
-+-----------------------------------------------------------------------+
-|                    LDLM 锁模式兼容性决策矩阵                           |
-+-----------------------------------------------------------------------+
-| 申请 \ 已存在 |   EX   |   PW   |   PR   |   CW   |   CR   |   NL    |
-+---------------+--------+--------+--------+--------+--------+---------+
-|      EX       |   否   |   否   |   否   |   否   |   否   |   是    |
-|      PW       |   否   |   否   |   否   |   是   |   是   |   是    |
-|      PR       |   否   |   否   |   是   |   否   |   是   |   是    |
-|      CW       |   否   |   是   |   否   |   是   |   是   |   是    |
-|      CR       |   否   |   是   |   是   |   是   |   是   |   是    |
-|      NL       |   是   |   是   |   是   |   是   |   是   |   是    |
-+-----------------------------------------------------------------------+
-```
+| 申请模式 \ 现有持锁模式 | `EX` (独占) | `PW` (写锁) | `PR` (读锁) | `CW` (并发写) | `CR` (并发读) | `NL` (空锁) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **`EX`** | 冲突 | 冲突 | 冲突 | 冲突 | 冲突 | 兼容 |
+| **`PW`** | 冲突 | 冲突 | 冲突 | 冲突 | 兼容 | 兼容 |
+| **`PR`** | 冲突 | 冲突 | 兼容 | 冲突 | 兼容 | 兼容 |
+| **`CW`** | 冲突 | 冲突 | 冲突 | 兼容 | 兼容 | 兼容 |
+| **`CR`** | 冲突 | 兼容 | 兼容 | 兼容 | 兼容 | 兼容 |
+| **`NL`** | 兼容 | 兼容 | 兼容 | 兼容 | 兼容 | 兼容 |
 
 ---
 
-## 6.2 锁的四种形态：针对不同存储实体的定制化隔离
+## 6.2 锁特化形态：针对不同存储实体的定制化隔离
 
-在 Lustre 中，不存在“一刀切”的锁。针对不同的文件系统对象，LDLM 派生出了四种特化的锁类型（[`enum ldlm_type`](https://github.com/lustre/lustre-release/blob/master/include/uapi/linux/lustre/lustre_idl.h#L2614-L2621)）：
+为避免对所有文件系统实体采用统一粒度的粗暴加锁，LDLM 支持四种特化的锁类型（`enum ldlm_type`）：
 
 ```c
 enum ldlm_type {
-	LDLM_PLAIN	= 10,	/* 扁平锁 */
-	LDLM_EXTENT	= 11,	/* 范围锁 */
-	LDLM_FLOCK	= 12,	/* POSIX 用户态文件锁 */
-	LDLM_IBITS	= 13,	/* Inode 字段位锁 */
+    LDLM_PLAIN  = 10,   /* 扁平锁：全对象互斥 */
+    LDLM_EXTENT = 11,   /* 范围锁：面向文件字节区间的细粒度锁 */
+    LDLM_FLOCK  = 12,   /* POSIX 文件锁：对应应用态 fcntl / flock */
+    LDLM_IBITS  = 13,   /* 字段位锁：面向元数据属性维度的细粒度锁 */
 };
 ```
 
-### 6.2.1 EXTENT 范围锁：超算并行 IO 的基石
+### 6.2.1 范围锁（Extent Lock）：文件字节区间的并发隔离
 
-在并行计算（MPI）场景中，数千个进程通常需要并发写入同一个极大的共享文件（如 100TB 的物理模拟网格）。
-如果采用传统全文件粒度的写锁，所有进程只能串行排队写入，带宽直接暴跌至单机水平。
+在 OST 数据对象上，LDLM 采用范围锁（`LDLM_EXTENT`）。每个锁定义了一个闭合字节区间 $[start, end]$（最大支持至 `OBD_OBJECT_EOF = ~0ULL`）。
 
-Lustre 在 OST 数据端全面采用 **EXTENT 范围锁**（[`struct ldlm_extent`](https://github.com/lustre/lustre-release/blob/master/include/uapi/linux/lustre/lustre_idl.h#L2626)）：
-```c
-struct ldlm_extent {
-	__u64 start;	/* 起始字节偏移 */
-	__u64 end;	/* 终止字节偏移 (可至 0xFFFFFFFFFFFFFFFF 即 EOF) */
-	__u64 gid;	/* 组锁标识 */
-};
+```mermaid
+flowchart LR
+    subgraph Shared_File ["共享大型文件 (如 1TB 科学计算数据集)"]
+        direction LR
+        BLOCK1["区间 0 ~ 1GB<br/>客户端 A 持有 [0, 1GB] LCK_PW"]
+        BLOCK2["区间 1GB ~ 2GB<br/>客户端 B 持有 [1GB, 2GB] LCK_PW"]
+        BLOCK3["区间 2GB ~ 1TB<br/>多客户端共享 LCK_PR"]
+    end
 ```
 
-两个写锁（PW Mode）只要其申请的区间不发生重叠，它们在 LDLM 判定中就是**绝对兼容**的！
+- **区间树（Interval Tree）算法**：服务端通过区间树结构组织锁范围，能够以 $O(\log N)$ 的时间复杂度快速判断新申请区间是否与现有已授予锁发生重叠。
+- **并发写入无阻塞**：多个计算节点（如 MPI 并行写入任务）可以同时持有同一文件不同字节区间的写锁（`LCK_PW`），各自在本地执行 Page Cache 缓冲与后台异步刷盘，互不发生锁冲突。
 
-```text
-+-------------------------------------------------------------------------------+
-|                       EXTENT 范围锁并发并行写入全景                           |
-+-------------------------------------------------------------------------------+
+### 6.2.2 字段位锁（Inode Bits Lock）：元数据维度的属性解耦
 
-同一个文件对象 (OST Object FID: 0x200000401)
-=================================================================================
-[0 MB ----------- 4 MB]  [4 MB ----------- 8 MB]  [8 MB ---------- 12 MB]  ...
-       Client A                 Client B                 Client C
-     持锁: PW                 持锁: PW                 持锁: PW
-  范围: [0, 4MB-1]         范围: [4MB, 8MB-1]       范围: [8MB, 12MB-1]
-=================================================================================
-               三大客户端同时满速打满物理网卡与 NVMe 阵列，互不阻塞！
-```
-
-### 6.2.2 IBITS 字段锁：元数据属性彻底解耦
-
-在元数据服务器（MDT）上，文件的属性非常复杂：文件名、权限、大小、修改时间、扩展属性、条带布局等。
-在早期分布式系统中，只要客户端 A 修改了文件权限，客户端 B 缓存的目录项和文件属性全被粗暴作废。
-
-Lustre 设计了著名的 **Inode Bits Lock（IBITS 锁）**（[`enum mds_ibits_locks`](https://github.com/lustre/lustre-release/blob/master/include/uapi/linux/lustre/lustre_idl.h#L973-L1002)）：
+在元数据服务器（MDS）上，传统单机锁通常对整个 Inode 加锁。但元数据包含多种正交属性（如文件名目录项、大小时间戳、扩展属性、布局描述符等）。为此，LDLM 引入了字段位锁（`LDLM_IBITS`）：
 
 ```c
-enum mds_ibits_locks {
-	MDS_INODELOCK_LOOKUP	= 0x00000001, /* 保护目录项 dentry 与路径名映射 */
-	MDS_INODELOCK_UPDATE	= 0x00000002, /* 保护文件大小、链接数、时间戳 */
-	MDS_INODELOCK_OPEN	= 0x00000004, /* 保护文件打开状态与句柄 */
-	MDS_INODELOCK_LAYOUT	= 0x00000008, /* 保护文件条带布局 (LOV EA) */
-	MDS_INODELOCK_PERM	= 0x00000010, /* 保护权限、属主与 ACL */
-	MDS_INODELOCK_XATTR	= 0x00000020, /* 保护非权限扩展属性 */
-	MDS_INODELOCK_DOM	= 0x00000040, /* 保护 MDT 上内嵌的小文件数据 (DOM) */
-};
+#define MDS_INODELOCK_LOOKUP   (1 << 0)  /* 目录项名称与路径映射缓存 */
+#define MDS_INODELOCK_UPDATE   (1 << 1)  /* 文件大小、修改时间 (mtime) 与链接数 */
+#define MDS_INODELOCK_OPEN     (1 << 2)  /* 文件打开状态与句柄引用 */
+#define MDS_INODELOCK_LAYOUT   (1 << 3)  /* 文件数据条带布局 (Striping Layout) */
+#define MDS_INODELOCK_PERM     (1 << 4)  /* 访问权限与属主 (UID/GID/ACL) */
+#define MDS_INODELOCK_XATTR    (1 << 5)  /* 扩展属性 (Extended Attributes) */
 ```
 
-两个客户端可以同时持有同一个文件的独占写模式（PW）IBITS 锁，**只要它们的 bits 完全正交**！
-- 客户端 A 持有 `MDS_INODELOCK_UPDATE` 写锁在修改文件时间戳；
-- 客户端 B 同时持有 `MDS_INODELOCK_PERM` 读锁在做权限检查，客户端 C 持有 `MDS_INODELOCK_LOOKUP` 读锁在缓存文件名；
-- 三者**完全互不干扰、无需撤回锁**！元数据并发吞吐因此产生质的跃升。
+- **锁粒度解耦**：当客户端修改文件扩展属性时，仅需申请针对 `MDS_INODELOCK_XATTR` 位的排他锁。其他正在并发读取该文件数据条带布局（持有 `MDS_INODELOCK_LAYOUT` 锁）或查询路径（持有 `MDS_INODELOCK_LOOKUP` 锁）的客户端完全不受影响，消除了无关元数据属性变更引发的锁失效风暴。
 
 ---
 
-## 6.3 革命性的 1-RTT 意向锁（Intent Lock）
+## 6.3 三大异步 AST 回调机制
 
-在分布式系统的经典交互模式下，执行一次看似简单的 `fd = open("/mnt/lustre/data.bin", O_RDONLY)`，在传统系统（如原始 NFS/Ceph）中必须按部就班地经历多轮网络交互：
+在分布式无中心或弱中心环境下，状态变更需要主动通知各参与方。LDLM 通过三组异步系统陷阱（AST, Asynchronous System Traps）机制驱动分布式锁状态协同。
 
-```text
-传统系统 VFS Open 时序 (至少 4~5 次网络往返!):
-Client ---------------- (1) Lookup 请求 (获取 dentry) ---------------> MDT
-Client <--------------- (2) Lookup 应答 (返回 inode) ----------------- MDT
-Client ---------------- (3) 申请 Inode 读锁 ------------------------> MDT
-Client <--------------- (4) 读锁已授予 (Granted) -------------------- MDT
-Client ---------------- (5) 发起 Open 系统调用 ----------------------> MDT
-Client <--------------- (6) Open 成功返回 --------------------------- MDT
-Client ---------------- (7) 请求获取文件条带布局 (Getattr / Layout) -> MDT
-Client <--------------- (8) 返回布局数据 ---------------------------- MDT
+```mermaid
+sequenceDiagram
+    participant C_Old as 现有持锁客户端 (持有 LCK_PW)
+    participant S as 服务端 (MDT / OST)
+    participant C_New as 新申请客户端 (申请 LCK_PR)
+
+    C_New->>S: 1. 发起锁申请 (ldlm_enqueue)
+    Note over S: 检查发现与 C_Old 存在锁模式冲突
+    S->>C_Old: 2. 发送异步阻断通知 (Blocking AST)
+    Note over C_Old: 收到 Blocking AST：<br/>将本地 Dirty Page 刷入存储<br/>撤销本地缓存，释放锁权限
+    C_Old-->>S: 3. 发送锁撤销确认 (ldlm_cancel)
+    Note over S: 将新锁移入 lr_granted 队列
+    S-->>C_New: 4. 发送锁授予通知 (Completion AST)
+    Note over C_New: 客户端获得锁权限，继续推进 I/O
 ```
 
-在 100 微秒延迟的网络中，打开一个文件就要白白浪费近 1 毫秒！如果有几千个并发进程同时执行，MDT 会被成倍的无意义交互报文彻底淹没。
+### 1. 阻断通知（Blocking AST）
+当新客户端申请的锁与已授予的现有锁发生冲突时，服务端并不直接粗暴剥夺旧锁，而是向现有持锁方发送 Blocking AST。
+- 持锁客户端接收到通知后，执行缓存同步（如将本地未回写的脏页 Flush 到 OST，或废弃过期的 Inode 缓存）；
+- 缓存同步完成后，持锁客户端向服务端发送 `ldlm_cancel` 释放或降级锁模式，让出并发通道。
 
-### 6.3.1 意向锁的物理哲学：操作随锁行
+### 2. 完成通知（Completion AST）
+当新锁由于资源冲突暂时无法获得授权被放入 `lr_waiting` 等待队列后，一旦冲突方释放锁资源，服务端通过 Completion AST 异步通知等待客户端，驱动其由等待状态迁移至生效执行状态。
 
-Lustre 提出了震惊存储学术界的 **意向锁（Intent Lock）**：
-**“既然客户端申请锁的最终目的是为了操作，为什么不直接把操作的意图直接夹带在加锁请求里，由服务端加锁时顺手把活给干了？”**
-
-```text
-+-------------------------------------------------------------------------------+
-|                       意向锁 (Intent Lock) 1-RTT 极致时序                     |
-+-------------------------------------------------------------------------------+
-
-Client                                                        MDT (Server)
-  |                                                                 |
-[用户调用 open("data.bin", O_RDWR)]                                 |
-  |                                                                 |
-  |--- (1) LDLM_ENQUEUE (带 IT_OPEN 意向 + 路径名 + 访问模式) ------->|
-  |                                                         [查找目录项 dentry]
-  |                                                         [执行权限校验]
-  |                                                         [分配打开句柄]
-  |                                                         [锁定 IBITS 资源]
-  |                                                         [打包文件 Layout]
-  |                                                         [打包文件属性 body]
-  |                                                                 |
-  |<-- (2) LDLM_ENQUEUE Reply (包含锁句柄 + 属性 + Layout + 结果) ---|
-  |                                                                 |
-[客户端在本地一次性建好 dentry、inode、打开状态与条带映射！]        |
-[耗时：严格仅 1 次网络往返 (1 RTT)！]
-```
-
-### 6.3.2 源码层面的意向映射
-
-查看 [`lustre/include/obd.h`](https://github.com/lustre/lustre-release/blob/master/lustre/include/obd.h#L941-L957)：
-
-```c
-static inline int it_to_lock_mode(struct lookup_intent *it)
-{
-	/* 若包含创建意向，必须申请并发写锁 CW */
-	if (it->it_op & IT_CREAT)
-		return LCK_CW;
-	/* 若为普通读属性、打开或解析路径，申请并发读锁 CR */
-	else if (it->it_op & (IT_GETATTR | IT_OPEN | IT_LOOKUP))
-		return LCK_CR;
-	/* 若为布局意向，根据是否写打开申请 EX 或 CR */
-	else if (it->it_op & IT_LAYOUT)
-		return (it->it_open_flags & FMODE_WRITE) ? LCK_EX : LCK_CR;
-	...
-}
-```
-
-客户端直接使用带有意向的 RPC，在单次网络报文中跨越了“分布式锁协商、元数据解析、权限鉴权、布局下发”四大原本孤立的阶段。
+### 3. 探测通知（Glimpse AST）
+在常规文件读取或属性获取（如 `ls -l`、`stat`）时，客户端需要获取文件当前最新的精确大小（`st_size`）与修改时间。然而，当前拥有写权限的客户端可能在本地 Page Cache 中写入了新数据，尚未触发回写刷盘。
+- 若采用传统逻辑，必须向持写锁方发送 Blocking AST 强行收回写锁并刷新全部脏页，开销巨大；
+- **Glimpse 机制**：服务端向持写锁方发送轻量的 Glimpse AST 探测消息。持锁客户端就地读取本地尚未刷盘的最新偏移量与时间戳回传，**写锁保留不被撤销**，兼顾了属性精准性与写缓存性能。
 
 ---
 
-## 6.4 锁的异步通信神经网：三大 AST 机制深度剖析
+## 6.4 意向锁（Intent Lock）：1-RTT 复合元数据操作
 
-分布式锁不是被动等待轮询的静态结构，而是一个事件驱动的异步系统。
-LDLM 的精髓在于其定义的 **三大 AST（Asynchronous System Trap 异步系统回调）**：
+在传统 POSIX 文件系统中，打开或创建一个文件涉及多个步骤的交互：
+1. 路径解析与元数据查找（`lookup`）并获取目录锁；
+2. 权限校验与属主检查（`permission`）；
+3. 文件创建或打开操作（`create` / `open`）；
+4. 获取针对该文件的操作锁。
 
-```text
-+-------------------------------------------------------------------------------+
-|                       LDLM 三大 AST 异步通知机制全景                          |
-+-------------------------------------------------------------------------------+
+若上述每一步骤均对应一次独立的 RPC 往返，单次文件访问需经历 4 至 5 个 RTT 网络延迟。
 
-      Client A (持锁者)                   Server (LDLM)           Client B (新申请者)
-             |                                  |                         |
-             |                                  |<--- (1) 申请冲突的写锁 ---|
-             |                                  |     (进入 lr_waiting)   |
-             |                                  |                         |
-             |<-- (2) Blocking AST -------------|                         |
-             |    (请立即下刷脏页并撤销/降级锁) |                         |
-    [将 PageCache 脏页刷盘]                     |                         |
-    [调用 ldlm_lock_cancel]                     |                         |
-             |                                  |                         |
-             |--- (3) Cancel OK 确认释放锁 ---->|                         |
-             |                                  |                         |
-             |                                  |--- (4) Completion AST ->|
-             |                                  |    (恭喜，你的锁已授予!)|
-             |                                  |                         |
+Lustre 首创了 **意向锁（Intent Lock）** 机制：
+
+```mermaid
+sequenceDiagram
+    participant C as 客户端
+    participant S as 服务端 (MDS)
+
+    Note over C: 用户执行 open("/data/test.dat", O_CREAT|O_RDWR)
+    C->>S: 发送复合意向锁 RPC (携带 IT_OPEN | IT_CREAT, 文件名, 期望模式)
+    Note over S: 服务端原子执行复合逻辑：<br/>1. 目录项路径查找 (lookup)<br/>2. 权限鉴权 (permission)<br/>3. 分配 Inode 与初始条带布局 (create)<br/>4. 将对应 IBITS 锁直接授予客户端
+    S-->>C: 单次应答返回 (包含文件 Inode, 初始属性, 条带布局, 已授予的 LDLM 锁)
+    Note over C: 客户端仅耗费 1 个 RTT 完成全部流程，立即可执行后续读写
 ```
 
-### 6.4.1 Blocking AST（阻断回调）
-
-当客户端 B 申请一个与客户端 A 当前持有的锁冲突的锁时，服务端不会强行粗暴剔除客户端 A，而是向客户端 A 发送一个 `LDLM_BL_CALLBACK`（Blocking AST）。
-- 客户端 A 的回调函数（如 [`lustre/llite/file.c`](https://github.com/lustre/lustre-release/blob/master/lustre/llite/file.c) 中的 `ll_mds_blocking_ast()`）被触发；
-- 如果是写锁（PW），客户端 A 必须在规定时间内将内核 PageCache 中的脏页通过 Bulk RPC 全部推向 OST；
-- 下刷完成后，客户端 A 释放或降级持有的锁，服务端方可安全将锁授予客户端 B。
-
-### 6.4.2 Completion AST（完成回调）
-
-客户端在异步申请锁（Non-blocking 或排队模式）时，如果无法立即获得，请求线程可以先去处理其他逻辑。
-一旦阻塞资源被释放，服务端通过 `LDLM_CP_CALLBACK`（Completion AST）通知客户端：“你之前排队的锁已经真正处于 GRANTED 状态”，客户端被唤醒继续推进 IO。
-
-### 6.4.3 Glimpse AST（窥探回调）：只读探测神技
-
-在传统文件系统中，如果用户敲了一个 `ls -l` 命令需要获知文件的大小（size）和修改时间（mtime），而此时另一个客户端正在并发执行写入并持有 `[0, EOF]` 的独占写锁。
-如果必须回收写锁才能拿到最新大小，写入客户端的 IO 流将被严重打断并触发昂贵的多次刷盘。
-
-Lustre 发明了 **Glimpse AST（窥探回调）**：
-- 服务端向持锁写入的客户端发送一个极轻量的 Glimpse 报文；
-- 持锁客户端在本地检查当前已被写入的最高偏移量，并就地原路回传；
-- **持锁客户端的写锁完全不被撤销，写 IO 流完全不被中断**；
-- 服务端据此拼装出正确的 stat 属性并返回给 `ls -l`！
+客户端在申请锁的同时，通过在 `ldlm_enqueue` 请求中嵌入意向数据块（Intent Data，如 `IT_OPEN`、`IT_CREAT`、`IT_GETATTR`），通告服务端自身后续的操作目的。服务端在锁仲裁路径中一次性完成文件创建、权限校验、句柄打开并返回所需的数据属性，**将元数据操作的网络往返时延压缩至 1 个 RTT**。
 
 ---
 
-## 6.5 动态锁收缩（Dynamic Lock Revocation）与 LRU 配额
+## 6.5 锁动态收缩与内存控制（SLV 与 Client LRU）
 
-### 6.5.1 客户端锁贪婪危机
+在大规模高并发集群中，若客户端无限期保留持有的只读锁或空闲锁，服务端与客户端的内核内存将被海量 `struct ldlm_lock` 结构体挤占。
 
-在分布式文件系统中，为了最大化缓存命中率，客户端在完成读写后，**绝不会主动立刻向服务端归还锁**，而是将这些未使用的锁保存在本地 LRU 链表（`ns_unused_list`）中，以便下次打开或读写时能够实现“本地零 RTT 命中”。
+Lustre 实现了基于 **服务端锁体积（SLV, Server Lock Volume）** 与客户端 LRU 的动态锁回收机制：
 
-然而，这引发了一个致命危机：
-如果集群有 10,000 个客户端，每个客户端都贪婪地缓存了 50,000 把锁，服务端的内存中将积压 **5 亿把锁**！MDT 和 OST 的物理内存在几分钟内就会被全部爆头（OOM）。
-
-### 6.5.2 SLV（Server Lock Volume）算法
-
-Lustre 设计了一套精密的动态锁收缩算法：**服务端锁体积（Server Lock Volume, SLV）**。
-
-```text
-服务端根据系统当前可用物理内存压力，动态评估集群允许的最大锁总数 Limit。
-并在每个 RPC 回包的 ptlrpc_body 中，动态捎带两个控制变量：
-- pb_slv: 当前服务端的锁体积参考水位
-- pb_limit: 该客户端被允许持有的最大未使用锁数量 (LRU Limit)
-```
-
-客户端在收到回包后，后台内核守护线程检测本地持有的锁数量：
-$$\text{ClientUnusedLocks} > \text{pb}_\text{limit}$$
-一旦越界，客户端后台线程立即触发 `ldlm_cancel_unused()`，批量将本地 LRU 队列末尾的闲置锁主动归还给服务端。
-
-### 6.5.3 提前锁取消（Early Lock Cancel, ELC）
-
-在释放无用锁时，如果每个锁都要发起一次单独的 RPC，网络将被数以万计的取消报文挤爆。
-Lustre 支持 **提前锁取消（ELC）**：
-客户端在发起任何新的正常 RPC（如发往该 Target 的普通读取或写入）时，顺便在报文中塞入需要销毁的旧锁句柄列表，**利用正常业务 RPC 免费搭车归还锁**，将销毁锁的网络开销降到了绝对的零。
+1. **服务端锁体积计算**：服务端根据当前命名空间内总锁数量、可用内存比例与请求压力，动态计算出一个全局评估值 SLV，并随 RPC 应答捎带通知所有客户端。
+2. **客户端本地 LRU 淘汰**：客户端维护本地未被进程直接引用的锁链表（Unused Lock List）。当客户端本地持锁量超过配置阈值（`lru_size`），或检测到服务端的 SLV 压力值上升时，客户端后台线程主动扫描并向服务端批量发送 `ldlm_cancel` 释放冷数据锁。
 
 ---
 
-## 6.6 生产实战：意向锁风暴、锁撤销超时与死锁排查
+## 6.6 生产实战：参数调优与监控指标
 
-### 6.6.1 生产事故复盘：万人 `ls -l` 引发 MDT 锁雪崩
-
-某智算中心在几千个计算节点同时启动深度学习数据加载脚本，该脚本错误地对同一个包含 1,000,000 个碎文件的共享数据集目录执行了无缓存的全局 `ls -l`：
-
-```text
-LustreError: 15421:0:(ldlm_lockd.c:380:ldlm_handle_bl_callback()) @@@ cancel callback failed for lock 0xffff880123: -110 (timed out)
-Lustre: MDT0000: client c3-hpc-123 failed to revoke lock within 100s, initiating client EVICTION!
-```
-
-**故障演进路径**：
-1. 上万客户端同时发起了对该巨型目录下文件的元数据读取请求；
-2. 客户端持有的 IBITS 锁数量瞬间突破百万，MDT 内存告急，触发 SLV 极限收缩；
-3. MDT 疯狂向成千上万个客户端下发 Blocking AST 撤销锁；
-4. 客户端本地负责处理锁撤销的内核线程 `ldlm_canceld` 队列被打满，无法在超时窗口（`ldlm_timeout`）内逐一完成下刷和确认；
-5. 服务端认定这几台客户端发生死锁，启动 **强制驱逐（Eviction）**，导致大批作业直接报错崩溃。
-
-### 6.6.2 生产排查与调优处方
-
-针对该类高并发锁争抢与锁雪崩，必须执行以下体系化加固：
+### 6.6.1 核心分布式锁参数配置
 
 ```bash
-# 1. 查看特定命名空间当前的活跃锁数量与等待队列深度
-cat /proc/fs/lustre/ldlm/namespaces/lustre-MDT0000-mdc-*/pool/grant_rate
-cat /proc/fs/lustre/ldlm/namespaces/lustre-MDT0000-mdc-*/lock_count
+# 1. 调整客户端本地未被引用锁的 LRU 缓存上限
+options ldlm ldlm_lru_size=400
 
-# 2. 调大客户端处理锁阻断回调的宽限超时时间 (默认 20s -> 调至 60s)
-lctl set_param ldlm.timeouts.ldlm_timeout=60
+# 2. 控制每个命名空间的最大并发锁数量 (服务端)
+options ldlm ldlm_namespaces_max=1000000
 
-# 3. 开启严格的 ELC 提前搭车释放，压制独立 Cancel 报文数量
-lctl set_param ldlm.namespaces.*.early_lock_cancel=1
-
-# 4. 强制压制客户端最大未激活锁缓存上限 (防止客户端过度贪婪)
-lctl set_param ldlm.namespaces.*.max_unused=400
+# 3. 开启提交时共享锁 (Commit-on-Share, COS) 提高事务吞吐
+options ldlm ldlm_cos=1
 ```
 
----
+### 6.6.2 常用状态监控与指标查看
 
-## 6.7 LDLM 分布式并发控制与调优 Checklist
-
-在超大规模并发集群中，针对 LDLM 锁管理器与意向锁，推荐执行以下工程核查：
-
-- [ ] **未用锁 LRU 缓存深度（max_unused）调优**：
-  检查所有客户端与服务端的 `ldlm.namespaces.*.max_unused`。大内存 MDS 节点可设为 100,000 ~ 500,000，维持极高元数据锁缓存命中率；而在多租户客户端上应设置为 400 ~ 1000，防止成千上万节点闲置锁霸占 MDS 内存引发锁收缩风暴。
-- [ ] **动态锁加权（SLV / ldlm_pool）健康度**：
-  监控 `/proc/fs/lustre/ldlm/services/ldlm_canceld/stats`。若 `recalc` 频次异常偏高，说明服务端锁内存水位线（`pool.granted`）逼近物理告警线，应扩充 MDS 内存或降低客户端的 `max_unused`。
-- [ ] **大范围 EXTENT 锁竞争避免（Shared-file Appending）**：
-  对于多进程并行追加写同一个共享文件的场景（如 MPI-IO），严禁使用普通 `write()` 盲目扩充锁范围，必须使用 `O_APPEND` 或使用 MPI-IO 独立的非重叠区间偏移，防止全文件 `[0, EOF]` 排他锁引发串行化雪崩。
-- [ ] **Glimpse AST 高频开销监控**：
-  在海量作业轮询文件大小时（如 `ls -l`），检查是否有大量 `glimpse_ast` 请求打满服务端。高频查询场景推荐在客户端开启用户态缓存或使用 `lfs find` 批量元数据抓取。
-- [ ] **意向锁（Intent Lock）网络往返核对**：
-  利用 `lctl get_param mdc.*.stats` 核对 `ldlm_intent_enqueue` 与普通 `ldlm_enqueue` 的比值，确保绝大部分文件 lookup、open 与 create 均命中 Intent 1-RTT 合并链路。
+| 监控目的 | 执行命令 | 输出关注重点 |
+| :--- | :--- | :--- |
+| **监控客户端持锁数量** | `lctl get_param ldlm.namespaces.*.lock_count` | 监控本地当前持有的锁总数，评估锁内存占用。 |
+| **查看锁资源等待队列** | `lctl get_param ldlm.services.*.waiting_locks` | 监控服务端是否存在大量处于 Waiting 状态的锁冲突。 |
+| **查看 AST 异步回调统计** | `lctl get_param ldlm.namespaces.*.pool.stats` | 查看 blocking/completion/glimpse 各类 AST 的触发频次与耗时。 |
 
 ---
 
-## 6.8 核心源码对照表
+## 6.7 生产事故案例：共享目录并发创建引发 Inode 字段锁颠簸（Lock Ping-Pong）
 
-| 核心抽象 / 组件 | 源码文件 | 核心函数 / 数据结构 | 架构功能与生产定位 |
-| :--- | :--- | :--- | :--- |
-| **锁资源与命名空间** | [`ldlm_resource.c`](https://github.com/lustre/lustre-release/blob/master/lustre/ldlm/ldlm_resource.c) | `struct ldlm_namespace`, `struct ldlm_resource` | 锁的层次化哈希桶、Granted/Waiting 队列管理 |
-| **锁申请与入队** | [`ldlm_lockd.c`](https://github.com/lustre/lustre-release/blob/master/lustre/ldlm/ldlm_lockd.c) | `ldlm_cli_enqueue()`, `ldlm_handle_enqueue()` | 客户端发起加锁与服务端冲突判定入口 |
-| **范围锁冲突算法** | [`ldlm_extent.c`](https://github.com/lustre/lustre-release/blob/master/lustre/ldlm/ldlm_extent.c) | `ldlm_extent_compat()` | 判定 `[start, end]` 区间是否重叠与模式兼容 |
-| **异步 AST 派发** | [`ldlm_lock.c`](https://github.com/lustre/lustre-release/blob/master/lustre/ldlm/ldlm_lock.c) | `ldlm_run_bl_ast()`, `ldlm_run_cp_ast()` | 触发跨网络 Blocking / Completion 异步回调 |
-| **动态锁收缩与 LRU** | [`ldlm_pool.c`](https://github.com/lustre/lustre-release/blob/master/lustre/ldlm/ldlm_pool.c) | `ldlm_pool_recalc()`, `ldlm_cancel_unused()` | SLV 锁容量动态加权移动平均与客户端淘汰机制 |
-| **意向锁协议解构** | [`lustre_idl.h`](https://github.com/lustre/lustre-release/blob/master/include/uapi/linux/lustre/lustre_idl.h) | `struct ldlm_intent`, `enum mds_ibits_locks` | 线路层 Intent 载荷与 IBITS 属性位切分规范 |
+### 6.7.1 故障现象
+
+某国家超算中心在运行大规模分子动力学模拟作业时，2048 个计算节点并发启动并在同一个集中共享输出目录（`/lustre/scratch/run_001/`）下同时创建独立结果文件（如 `node_0001.dat` 至 `node_2048.dat`）。
+
+作业启动阶段，文件系统整体元数据响应极其缓慢，`ls -la` 挂起超过 60 秒。MDS 节点的 CPU 软中断利用率与网络接收队列持续维持在接近 100% 的极高负载，但每秒创建文件数（Create IOPS）由基线 45,000 暴跌至不足 800。
+
+### 6.7.2 排查过程
+
+1. **锁冲突排查**：  
+   在 MDS 上检查 LDLM 命名空间的冲突统计：
+   ```bash
+   lctl get_param ldlm.namespaces.MDT0000.waiting_locks
+   lctl get_param ldlm.namespaces.MDT0000.lock_timeouts
+   ```
+   输出显示：共享目录父 Inode 的资源项上聚集了超过 2000 个处于等待状态的锁申请，且每秒产生数千次 Blocking AST 回调。
+
+2. **机制定性分析**：  
+   客户端在创建新文件时，需要对父目录 Inode 申请针对 `MDS_INODELOCK_UPDATE` 的排他写锁，以更新目录的修改时间（`mtime`）和目录项哈希树结构。  
+   在 2048 个节点同时并发修改同一个父目录时，锁权限在不同的客户端之间高频发生“申请 $\rightarrow$ 阻断已有锁 $\rightarrow$ 强制撤销刷盘 $\rightarrow$ 移交新锁”的循环，形成了经典的 **分布式锁颠簸（Lock Ping-Pong）** 现象。CPU 大量时间消耗在跨网络发送 Blocking AST 与接收 Cancel 应答上，有效文件创建流水线严重停滞。
+
+### 6.7.3 修复措施与成效
+
+1. **开启目录并发修改优化（Commit-on-Share / Parallel Directory）**：  
+   在 MDS 上激活目录写锁细粒度并发机制：
+   ```bash
+   lctl set_param ldlm.namespaces.MDT0000.cos=1
+   ```
+2. **应用层输出目录分桶策略**：  
+   推动作业编排系统改写应用落盘逻辑，将全扁平共享目录拆解为按节点分级的子目录结构（如 `/lustre/scratch/run_001/part_<00-63>/node_xxxx.dat`），将单个父 Inode 的锁竞争分散至 64 个独立子目录中。
+
+调整后，元数据创建速率恢复至 48,000 IOPS，锁颠簸与网络 AST 广播风暴消除。
 
 ---
 
-## 6.8 本章小结与第二部分回顾
+## 6.8 运维基线检查清单
 
-在本章中，我们完整揭开了 Lustre 分布式锁管理器（LDLM）的宏大图景：
-1. **区间与属性的双重细粒度解耦**：EXTENT 范围锁让超算多进程并行区间写毫无阻塞，IBITS 字段锁让多客户端修改不同属性互不踩踏；
-2. **意向锁（Intent Lock）创造了 1-RTT 性能奇迹**：将分布式锁与打开、查询、创建操作强行合一，将传统多轮握手暴力归一；
-3. **三大 AST 构筑了自愈的事件神经网**：Blocking 保证安全，Completion 保证异步，Glimpse 则在零打断写并发的同时奉献精准的状态观测；
-4. **SLV 与 LRU 实现了弹性锁治理**：在极致缓存命中与有限服务端内存之间达成了高精度的动态动态平衡。
+- [ ] **客户端 LRU 锁配额控制**：检查客户端 `ldlm_lru_size`。在具有海量小文件并发访问的客户端上，建议设为 400 至 800，避免过大占用客户端内存，同时防止过小引发重复申请开销。
+- [ ] **监控锁撤销阻塞（Blocking AST Timeouts）**：将 `ldlm.services.*.lock_timeouts` 纳入告警规则。若出现超时，说明存在由于网络卡顿或客户端死锁无法及时释放锁的情况。
+- [ ] **高并发共享目录分桶治理**：针对作业启动或日志写入场景，推动用户规范化使用散列目录结构，严禁数千进程直接在单一顶层目录下执行无序并发创建。
+- [ ] **验证意向锁机制正常生效**：确认客户端挂载选项未禁用 Intent Lock 特性，保证元数据访问维持 1-RTT 复合效率。
 
 ---
 
-### 第二部分（Core Distributed Engine）里程碑总结
+## 本章小结
 
-随着第四、五、六章的写就，**第二部分：核心分布式引擎：Portal RPC 与分布式锁** 已圆满铸成坚不可摧的整体：
-- **第四章（Portal RPC）**：打造了控制流与大块 RDMA 解耦的高性能多 CPT 异步流水线；
-- **第五章（AT 与容灾恢复）**：揭示了 Early Reply 免死金牌与断电零丢失的事务/锁重放奇迹；
-- **第六章（LDLM 分布式锁）**：奠定了全集群超大规模并发一致性与 1-RTT 意向锁的巅峰性能基石。
-
-有了这套无比强悍的通信与锁引擎，Lustre 是如何在内核对象模型（OBD）上搭建分层软件架构的？
-在接下来的 **第三部分：对象存储抽象与核心子系统（OBD Foundation）** 中，我们将深入剖析 Lustre 赖以成名的分层驱动堆栈 —— `obd_device`、`obd_ops`，以及统领万千元数据与数据路由的 **`lu_object` / `dt_device` / `md_device` 现代分层内核模型**！
+LDLM 作为维护 Lustre 分布式数据与元数据一致性的中枢组件，通过分层的命名空间、资源实体与锁队列模型，实现了清晰的并发控制；通过针对数据块的范围锁（`LDLM_EXTENT`）与针对元数据的字段位锁（`LDLM_IBITS`），将锁冲突细化至最小粒度；通过 Blocking、Completion 与 Glimpse 三大异步 AST 机制，实现了无中心化的平滑状态协同；通过首创的意向锁机制将多轮元数据交互合并为 1-RTT 复合操作；并通过 SLV 与动态 LRU 机制有效避免了集群锁内存的无限膨胀。

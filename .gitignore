@@ -1,6 +1,8 @@
 # mdBook build output
 dist/
-book/
+book/*.pdf
+!book/extracted/**
+
 
 # Dependencies
 node_modules/

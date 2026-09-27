@@ -1,405 +1,345 @@
-# 第七章：OBD 分层模型与设备生命周期 —— 经典对象驱动、XArray 拓扑与僵尸回收防线
+# 第 7 章：OBD 分层模型与设备生命周期
 
-> “在 Linux 内核传统的存储架构中，VFS 之下通常紧接着块设备层（Block Layer），块层以逻辑块寻址（LBA）将磁盘视为扁平的扇区数组。但在一个跨越数千台节点、容纳数百 PB 数据的分布式存储体系中，依然使用块级别抽象将导致元数据与数据路由的彻底失控。Lustre 突破性地构筑了 OBD（Object-Based Device）分层体系，将整个集群抽象为一个由软件对象驱动层层堆叠的虚拟积木城堡。”
-
-在前面两大部分中，我们征服了 [LNet 传输网](../part-01-foundation/02-lnet.md)、[Portal RPC 管道](../part-02-rpc-and-locks/04-portal-rpc.md) 以及 [LDLM 分布式锁](../part-02-rpc-and-locks/06-ldlm-locks.md)。现在，我们将目光聚焦到 Lustre 的软件架构中轴线 —— **OBD（Object-Based Device）分层模型**。
-
-本章我们将深入探索：
-- 为什么 Lustre 放弃了传统块设备抽象，选择了对象设备（OBD）？
-- 贯穿全局的核心骨架 [`struct obd_device`](https://github.com/lustre/lustre-release/blob/master/lustre/include/obd.h#L698) 与统一函数表 [`struct obd_ops`](https://github.com/lustre/lustre-release/blob/master/lustre/include/obd.h#L1183)；
-- 全局设备拓扑的管理演进：从古老数组到 Linux 内核高并发 **XArray（`obd_devs`）**；
-- 支撑安全卸载与防止 Use-After-Free 崩溃的 **僵尸对象收割机制（Zombie Culling）**。
+> **本章核心源码文件**：  
+> - `lustre/include/obd.h`：`struct obd_device`、`struct obd_ops` 及核心设备类型定义  
+> - `lustre/include/obd_class.h`：OBD 设备类注册、查找与通用操作宏定义  
+> - `lustre/obdclass/genops.c`：全局设备表（`obd_devs`）、设备分配与生命周期管理  
+> - `lustre/obdclass/obd_config.c`：配置指令（`lcfg`）解析与设备装配初始化  
+> - `lustre/include/lustre_export.h`：Export 结构体与客户端会话管理定义  
 
 ---
 
-## 7.1 分层架构演进：从 Linux VFS 到 Lustre 虚拟对象栈
+## 7.1 分层架构设计：从块抽象到虚拟对象栈
 
-### 7.1.1 块存储（Block）vs 对象存储（OBD）
+在传统的存储体系中，通用块存储（如 iSCSI 或 Ceph RBD）向操作系统暴露的是平坦的逻辑块地址空间（LBA）。文件系统的元数据结构（如 Superblock、Inode 表、位图及目录项）全部需要在客户端本地进行解析与修改。当多个计算客户端需要并发挂载同一存储卷时，必须引入复杂的分布式单机文件系统（如 GFS2、OCFS2），并在客户端之间频繁同步块级缓存与锁，导致元数据处理扩展性受限。
 
-传统分布式块存储（如 iSCSI、Ceph RBD）暴露给客户端的是一个裸磁盘卷。文件的元数据（inode、目录树）必须在客户端本地文件系统解析，这导致多客户端并发挂载时必须引入昂贵的分布式集群文件系统（如 OCFS2、GFS2）。
+Lustre 采纳了对象存储设备（OBD, Object-Based Device）模型：
+- **存储端面向对象建模**：底层存储目标不再暴露裸扇区，而是对外暴露具备独立属性和变长数据流的“存储对象”。
+- **职责解耦**：磁盘空间分配、块位图管理及 Extent 映射完全下沉至 MDS 与 OSS 本地的本地存储驱动（如 `osd-ldiskfs` 或 `osd-zfs`）自行处理；客户端仅需发起逻辑对象层级的读取、写入与属性修改请求。
 
-Lustre 采纳了 ANSI T10 OSD（Object-Based Storage Device）理念：
-- **存储目标不再暴露 LBA 扇区，而是暴露“对象（Object）”**；
-- 每个对象拥有唯一的 128 位 ID（FID）、拥有独立的属性（Attributes）和可变长的数据流；
-- 底层空间分配、Extent 映射由 OST/MDT 本地文件系统（ldiskfs/ZFS）自理，客户端只负责发出高层次的对象操作。
+```mermaid
+flowchart TD
+    subgraph Client_Stack ["客户端 OBD 驱动堆叠"]
+        VFS["Linux 内核 VFS"]
+        LLITE["llite (Lustre 客户端 VFS 适配层)"]
+        LMV["lmv (逻辑元数据卷聚合层)"]
+        LOV["lov (逻辑对象卷条带化层)"]
+        MDC["mdc (元数据客户端驱动)"]
+        OSC["osc (对象存储客户端驱动)"]
+    end
 
-### 7.1.2 客户端与服务端驱动堆叠全景图
+    subgraph Transport_Layer ["网络与通信中枢"]
+        PTL["Portal RPC / LNet 通信栈"]
+    end
 
-在 Lustre 中，任何一个具体的功能模块（无论是网络客户端、逻辑卷分片器还是本地磁盘驱动）都被包装成一个标准化的 OBD 设备。
-它们像积木一样在内核中垂直叠加：
+    subgraph Server_Stack ["服务端 OBD 驱动堆叠"]
+        MDT["mdt (元数据服务端驱动)"]
+        OST["ost (对象存储服务端驱动)"]
+        MDD["mdd (元数据业务控制层)"]
+        LOD["lod (布局与对象分发层)"]
+        OSD_M["osd-ldiskfs / osd-zfs (MDT 本地对象存储)"]
+        OSD_O["osd-ldiskfs / osd-zfs (OST 本地对象存储)"]
+    end
 
-```text
-+-------------------------------------------------------------------------------+
-|                       Lustre 客户端与服务端 OBD 分层堆叠全景                  |
-+-------------------------------------------------------------------------------+
-
-[Client Node]                                   [Server Node (MDS / OSS)]
-+-----------------------------+
-|    POSIX Applications       |
-+--------------+--------------+
-               | (sys_open / sys_read)
-               v
-+-----------------------------+
-|      Linux Kernel VFS       |
-+--------------+--------------+
-               |
-               v
-+-----------------------------+
-|    llite (Lustre Lite VFS)  |
-+--------------+--------------+
-               |
-       +-------+-----------------------------+
-       | (元数据路径)                         | (数据 IO 路径)
-       v                                     v
-+---------------+                     +---------------+
-|      lmv      | (逻辑元数据卷聚合)   |      lov      | (逻辑对象卷分片)
-+-------+-------+                     +-------+-------+
-        |                                     |
-        v                                     v
-+---------------+                     +---------------+
-|      mdc      | (元数据客户端驱动)   |      osc      | (对象存储客户端驱动)
-+-------+-------+                     +-------+-------+
-        | (通过 Portal RPC 打包)               | (通过 Bulk Transfer 封装)
-        v                                     v
-+---------------+                     +---------------+
-|  ptlrpc / LNet|                     |  ptlrpc / LNet|
-+-------+-------+                     +-------+-------+
-        |                                     |
-        ================== 物理高速网络 =======+=========================
-        |                                     |
-        v                                     v
-+---------------+                     +---------------+
-|      mdt      | (元数据服务端驱动)   |      ost      | (对象存储服务端驱动)
-+-------+-------+                     +-------+-------+
-        |                                     |
-        v                                     v
-+---------------+                     +---------------+
-|      mdd      | (元数据核心决策层)   |      osd      | (对象存储底层驱动:
-+-------+-------+                     +-------+-------+  osd-ldiskfs / osd-zfs)
-        |                                     |
-        v                                     v
-  [物理元数据盘 SSD/NVMe]               [物理数据阵列 HDD/NVMe]
+    VFS --> LLITE
+    LLITE -->|元数据路径| LMV
+    LLITE -->|数据 I/O 路径| LOV
+    LMV --> MDC
+    LOV --> OSC
+    MDC --> PTL
+    OSC --> PTL
+    PTL --> MDT
+    PTL --> OST
+    MDT --> MDD
+    MDD --> LOD
+    LOD --> OSD_M
+    OST --> OSD_O
 ```
 
-这种模块化设计带来了极强的灵活性：
-- 客户端只需面对抽象的 `lov`（Logical Object Volume），由 `lov` 将一个 100GB 的大文件透明条带化打碎成数十个 Extent 分片，分发给底层的几十个 `osc`（Object Storage Client）；
-- 上层应用无需感知数据究竟落在哪个 OST 上；
-- 在多元数据中心（DNE）架构下，`lmv` 自动根据目录哈希将不同的目录项请求路由到不同的 `mdc`。
+整个文件系统各层功能组件（包括网络客户端、本地驱动与聚合分发器）均统一抽象为标准化的 OBD 设备，在内核中通过统一接口自底向上分层装配。
+
+![llite 与 mgc 经由 obdclass 的通信机制](../images/internals_fig06_llite_mgc_obdclass.png)
+
+*图 7-1: 客户端 llite 与 mgc 子系统通过通用的 obdclass 接口及 OBP 宏进行解耦调用（来源：Understanding Lustre Internals）*
+
+![mgc 与 llite 子系统交互的核心数据结构](../images/internals_fig07_mgc_llite_structs.png)
+
+*图 7-2: mgc 与 llite 子系统交互中的关键内存数据结构（ll_sb_info、obd_device、obd_export）（来源：Understanding Lustre Internals）*
 
 ---
 
-## 7.2 核心实体解构：`struct obd_device`
+## 7.2 核心数据结构：`struct obd_device` 与 `struct obd_ops`
 
-在内核内存中，每一个激活的驱动实例都被抽象为一个全局唯一的结构体：[`struct obd_device`](https://github.com/lustre/lustre-release/blob/master/lustre/include/obd.h#L698)。
-
-### 7.2.1 关键字段全景剖析
-
-查看源码 [`lustre/include/obd.h`](https://github.com/lustre/lustre-release/blob/master/lustre/include/obd.h#L698-L760)：
+每个具体的存储驱动实例在内核中均由 `struct obd_device`（`lustre/include/obd.h`）表示：
 
 ```c
 struct obd_device {
-	struct obd_type		*obd_type;	/* 指向驱动类型 (如 "osc", "mdc", "lov") */
-	__u32			 obd_magic;	/* 魔数 0xAB5CD6EF，防内存踩踏 */
-	int			 obd_minor;	/* 设备唯一编号，即 lctl dl 中的索引 */
-	struct lu_device	*obd_lu_dev;	/* 指向下一代现代 lu_device 模型 */
+    struct obd_type        *obd_type;           /* 指向设备类型描述符 (如 "osc", "mdt") */
+    char                    obd_name[MAX_OBD_NAME]; /* 设备全局唯一实例名 (如 "testfs-OST0000") */
+    struct obd_uuid         obd_uuid;           /* 设备的 UUID 标识 */
+    int                     obd_minor;          /* 在全局设备数组中的索引槽位编号 */
+    
+    /* 标志位 */
+    unsigned long           obd_attached:1,     /* 设备已分配并挂接 */
+                            obd_set_up:1,       /* 设备 setup() 函数执行成功 */
+                            obd_stopping:1,     /* 正在执行停止流程 */
+                            obd_force:1,        /* 强制卸载标志位 */
+                            obd_fail:1;         /* 设备发生故障异常 */
 
-	struct obd_uuid		 obd_uuid;	/* 设备的全局唯一 UUID 字符串 */
-	char			 obd_name[MAX_OBD_NAME]; /* 人类可读名称 (如 lustre-OST0000-osc) */
-
-	/* 保护设备内部状态修改的全局位图与自旋锁 */
-	DECLARE_BITMAP(obd_flags, OBDF_NUM_FLAGS);
-	spinlock_t		 obd_dev_lock;
-
-	/* 哈希桶与连接链表 */
-	struct rhashtable	 obd_uuid_hash;	/* UUID 到 Export 的极速查找哈希 */
-	struct rhltable		 obd_nid_hash;	/* 客户端 NID 到 Export 的反查哈希 */
-	struct list_head	 obd_exports;	/* 挂载到该设备的所有活跃客户端 Export 链表 */
-	struct kref		 obd_refcount;	/* 内核安全引用计数 */
-
-	/* 分布式锁与通信组件 */
-	struct ldlm_namespace	*obd_namespace;	/* 该设备独占的 LDLM 锁命名空间 */
-	struct ptlrpc_client	 obd_ldlm_client;/* 发往远端锁服务的 RPC 客户端通道 */
-
-	/* 统计与容量缓存 */
-	spinlock_t		 obd_osfs_lock;
-	struct obd_statfs	 obd_osfs;	/* 磁盘容量、inode 剩余量等缓存 */
-	time64_t		 obd_osfs_age;	/* statfs 缓存有效时限 */
-
-	/* 恢复与事务中枢 */
-	__u64			 obd_last_committed; /* 服务端已落盘的最高事务序列号 */
-	spinlock_t		 obd_recovery_task_lock;
-	struct hrtimer		 obd_recovery_timer;
-	...
+    struct obd_ops         *obd_ops;            /* 设备操作函数跳转表 */
+    struct md_ops          *md_ops;             /* 元数据专用操作跳转表 */
+    
+    struct ldlm_namespace  *obd_namespace;      /* 该设备拥有的 LDLM 分布式锁命名空间 */
+    struct rhashtable       obd_uuid_hash;      /* 客户端 Export 会话 UUID 哈希表 */
+    struct rhltable         obd_nid_hash;       /* 客户端 Export 会话 NID 哈希表 */
+    atomic_t                obd_refcount;       /* 设备全局引用计数 */
+    wait_queue_head_t       obd_boot_waitq;     /* 初始化等待队列 */
 };
 ```
 
-每个 `obd_device` 既是业务逻辑的执行者，也是状态与连接的容器：
-- 它维护了连接到当前节点的所有远端客户端凭证（`obd_exports`）；
-- 它内置了独立的锁命名空间（`obd_namespace`），保证锁管理在设备层实现彻底隔离；
-- 它记录了该设备相关的事务落盘水线（`obd_last_committed`），为容灾恢复提供核心账本。
+### 统一设备操作表：`struct obd_ops`
 
-### 7.2.2 全局设备拓扑查找：XArray（`obd_devs`）演进
-
-在早期 Lustre 中，系统使用一个固定大小的指针数组 `struct obd_device *obd_devs[MAX_OBD_DEVICES]`（通常最多支持 8,192 个设备）。
-在现代超大规模 AI 超算中，一个客户端需要挂载数千个 OST 和数百个 MDT，固定数组不仅浪费内存，更在大规模并发查找时引发了巨大的读写锁竞争。
-
-在最新的 Lustre 架构中，全局设备表彻底升级为 Linux 内核现代的 **XArray 结构**（[`lustre/obdclass/genops.c:29`](https://github.com/lustre/lustre-release/blob/master/lustre/obdclass/genops.c#L29)）：
-
-```c
-/* lustre/obdclass/genops.c */
-DEFINE_XARRAY_ALLOC(obd_devs);
-EXPORT_SYMBOL(obd_devs);
-static atomic_t obd_devs_count = ATOMIC_INIT(0);
-```
-
-通过基于 RCU（Read-Copy-Update）的无锁 XArray 引擎：
-- 查找设备（`class_num2obd(minor)`）只需调用 `xa_load(&obd_devs, dev_no)`，**读操作完全免锁**，在数万线程并发访问时依然保持近乎零时延；
-- 分配新设备时调用 `__xa_alloc()` 自动寻找最小空闲次设备号，动态扩展无上限。
-
-我们日常执行的诊断命令 `lctl dl`（Device List），其底层就是遍历该 XArray，将每个槽位中的 `obd_device` 状态与名字输出到控制台：
-
-```bash
-# 执行 lctl dl 看到的典型设备拓扑
-$ lctl dl
-  0 UP osd-ldiskfs lustre-OST0000-osd lustre-OST0000-osd_UUID 5
-  1 UP ost ost lustre-OST0000-ost_UUID 5
-  2 UP osc lustre-OST0000-osc-ffff8801 lustre-mdt-MDT0000_UUID 5
-  3 UP lov lustre-clilv-ffff8801 lustre-clilv-ffff8801_UUID 4
-  4 UP llite lustre-clilm-ffff8801 lustre-clilm-ffff8801_UUID 1
-```
-
----
-
-## 7.3 面向对象操作契约：`struct obd_ops`
-
-如果说 `obd_device` 是面向对象中的“类实例”，那么 [`struct obd_ops`](https://github.com/lustre/lustre-release/blob/master/lustre/include/obd.h#L1183) 就是所有对象设备必须实现的“虚函数表（Vtable）”。
-
-任何上层模块想要操作下层模块，**绝不允许直接调用下层模块的具体函数**，必须通过 `obd_ops` 约定的标准化接口。
-
-### 7.3.1 核心方法分类速查
+上层通用代码通过 `struct obd_ops` 约定的函数指针访问底层硬件或逻辑层，隔离各模块实现细节：
 
 ```c
 struct obd_ops {
-	struct module *o_owner;
-
-	/* 1. 控制与生命周期族 */
-	int (*o_iocontrol)(unsigned int cmd, struct obd_export *exp, ...);
-	int (*o_connect)(const struct lu_env *env, struct obd_export **exp, ...);
-	int (*o_reconnect)(const struct lu_env *env, struct obd_export *exp, ...);
-	int (*o_disconnect)(struct obd_export *exp);
-
-	/* 2. 对象属性与状态族 */
-	int (*o_statfs)(const struct lu_env *env, struct obd_export *exp, ...);
-	int (*o_create)(const struct lu_env *env, struct obd_export *exp, struct obdo *oa);
-	int (*o_destroy)(const struct lu_env *env, struct obd_export *exp, struct obdo *oa);
-	int (*o_setattr)(const struct lu_env *env, struct obd_export *exp, struct obdo *oa);
-	int (*o_getattr)(const struct lu_env *env, struct obd_export *exp, struct obdo *oa);
-
-	/* 3. 分散/聚集大块数据 IO 族 */
-	int (*o_preprw)(const struct lu_env *env, int cmd, struct obd_export *exp,
-			struct obdo *oa, int objcount, struct obd_ioobj *obj,
-			struct niobuf_remote *remote, int *nr_pages,
-			struct niobuf_local *local);
-	int (*o_commitrw)(const struct lu_env *env, int cmd, struct obd_export *exp,
-			  struct obdo *oa, int objcount, struct obd_ioobj *obj,
-			  struct niobuf_remote *remote, int pages,
-			  struct niobuf_local *local, int rc, int nob, ktime_t kstart);
-
-	/* 4. 容灾与事件通知族 */
-	int (*o_import_event)(struct obd_device *obd, struct obd_import *imp,
-			      enum obd_import_event);
-	int (*o_notify)(struct obd_device *obd, struct obd_device *watched,
-			enum obd_notify_event ev);
-	int (*o_health_check)(const struct lu_env *env, struct obd_device *obd);
+    struct module *owner;
+    int (*setup)(struct obd_device *dev, struct lustre_cfg *cfg);
+    int (*cleanup)(struct obd_device *dev);
+    int (*connect)(const struct lu_env *env, struct obd_export **exp,
+                   struct obd_device *dev, struct obd_uuid *cluuid,
+                   struct obd_connect_data *data, void *localdata);
+    int (*disconnect)(struct obd_export *exp);
+    int (*statfs)(const struct lu_env *env, struct obd_export *exp,
+                  struct obd_statfs *osfs, time64_t max_age, __u32 flags);
+    int (*iocontrol)(unsigned int cmd, struct obd_export *exp, int len,
+                     void *karg, void __user *uarg);
+    /* 核心数据读写方法 */
+    int (*preprw)(const struct lu_env *env, int cmd, struct obd_export *exp,
+                  struct obdo *oa, int objcount, struct obd_ioobj *obj,
+                  struct niobuf_remote *remote, int *pages,
+                  struct niobuf_local *local);
+    int (*commitrw)(const struct lu_env *env, int cmd, struct obd_export *exp,
+                    struct obdo *oa, int objcount, struct obd_ioobj *obj,
+                    struct niobuf_remote *remote, int pages,
+                    struct niobuf_local *local, int rc);
 };
 ```
 
-### 7.3.2 深度拆解：`o_preprw` 与 `o_commitrw` 的物理内涵
-
-在 `obd_ops` 中，最具技术含量的当属大块数据读写（Bulk RW）的二阶段接口：`o_preprw` 与 `o_commitrw`。
-它们定义了分布式网络页面与底层物理磁盘块的交汇边界：
-
-```text
-+-------------------------------------------------------------------------------+
-|                       o_preprw 与 o_commitrw 执行时序                         |
-+-------------------------------------------------------------------------------+
-
-[客户端发起 4MB 写入请求]
-           |
-           v
-服务端接收到 RPC，调用底层 OSD 驱动:
-1. o_preprw (Prepare Read/Write)
-   - 在服务端物理内存中分配/锁定待写入的连续物理 Page 数组 (struct niobuf_local)
-   - 检查配额与底层文件系统空间预留
-   - 将内存页面注册到 LNet，准备迎接网络 RDMA Bulk GET
-           |
-           v
-[LNet 通过 RDMA Read 将 4MB 数据拉取到这些本地页面中]
-           |
-           v
-2. o_commitrw (Commit Read/Write)
-   - 启动底层后端文件系统 (ldiskfs JBD2 日志 / ZFS 事务组 TXG)
-   - 将这批页面实际提交到存储控制器的 BIO 队列排队刷盘
-   - 计算并校验数据 End-to-End Checksum (校验和)
-   - 释放本地页面锁定，返回最终写入字节数与事务号
-```
-
-这种两阶段设计将 **网络内存准备** 与 **磁盘持久化提交** 严格解耦，使得底层无论挂接的是 EXT4（ldiskfs）还是 ZFS，甚至未来全闪 NVMe 驱动，上层通信协议完全无需修改一行代码！
-
----
-
-## 7.4 客户端与服务端纽带：`obd_import` 与 `obd_export`
-
-在分布式环境中，单机内的一对指针是无法跨越物理网络的。
-为了在物理机之间建立可信、可追踪的会话，Lustre 设计了著名的 **Import-Export 孪生机制**：
-
-```text
-+-------------------------------------------------------------------------------+
-|                       obd_import 与 obd_export 镜像关系                       |
-+-------------------------------------------------------------------------------+
-
-       客户端节点 (Client)                              服务端节点 (Server)
-+-------------------------------+               +-------------------------------+
-|   obd_device (如 osc 驱动)    |               |   obd_device (如 ost 驱动)    |
-|               |               |               |               |               |
-|               v               |               |               v               |
-|        struct obd_import      |               |        struct obd_export      |
-|  - 记录远端服务端的 NID       |               |  - 记录连接该端的客户端 NID   |
-|  - 维护网络自适应超时 (AT)    |               |  - 维护该客户端持有的锁列表   |
-|  - 维护重放队列 (replay_list) | ===== 网络 ==>|  - 维护未提交事务与客户端配额 |
-|  - 记录连接代数 (generation)  |               |  - 记录该客户端的最后活跃时间 |
-+-------------------------------+               +-------------------------------+
-```
-
-- **`struct obd_import`（导入句柄，客户端持有）**：
-  客户端“导入”了一个远端服务。它是客户端对服务端状态的全部认知集合，掌管着断网重连状态机、AT 均值与未确认重放队列。
-- **`struct obd_export`（导出句柄，服务端持有）**：
-  服务端将自身的能力“导出”给了某一个特定的客户端。它是服务端对特定客户端的审计凭证与会话上下文。如果某个客户端长期失联，服务端只需调用 `class_fail_export(exp)`，即可精准斩断该客户端的所有资源而绝不波及他人。
-
----
-
-## 7.5 生产实战：设备卸载卡死、引用计数泄漏与僵尸收割（Zombie Culling）
-
-### 7.5.1 生产血泪：无法卸载的“D 状态”死锁
-
-在维护生产集群时，系统管理员最常遇到的恐怖场景之一就是：
-对一个 Lustre 客户端执行 `umount /mnt/lustre`，终端光标彻底卡死。执行 `ps aux | grep umount`，进程稳稳地处于 `D`（不可中断休眠）状态：
-
-```text
-[ 1420.112040] INFO: task umount:5124 blocked for more than 120 seconds.
-[ 1420.112088] Call Trace:
-[ 1420.112102]  __schedule+0x2d1/0x890
-[ 1420.112120]  schedule+0x36/0x80
-[ 1420.112134]  obd_zombie_barrier+0x7e/0xa0 [obdclass]
-[ 1420.112150]  class_cleanup+0x180/0x240 [obdclass]
-[ 1420.112165]  lustre_common_put_super+0x80/0x120 [lustre]
-```
-
-### 7.5.2 根因定位：内核引用计数泄漏与安全屏障
-
-## 7.5 真实生产事故复盘：客户端卸载挂死与 obd_zombie_barrier 引用泄漏深渊
-
-### 7.5.1 事故现场：无法自拔的 D 状态进程
-
-某超算集群维护窗口，运维批量执行 `umount -f /mnt/lustre` 时，全场近 300 台计算节点全部陷入 D 状态假死：
-```text
-# ps aux | grep umount
-root  12480  0.0  0.0 108420  1450 ?  D  10:20   0:00 umount -f /mnt/lustre
-
-# cat /proc/12480/stack
-[<0>] obd_zombie_barrier+0x8a/0x110 [obdclass]
-[<0>] class_detach_disconnect+0x102/0x240 [obdclass]
-[<0>] ll_put_super+0x130/0x310 [lustre]
-[<0>] generic_shutdown_super+0x72/0x110
-[<0>] kill_anon_super+0x14/0x30
-[<0>] deactivate_locked_super+0x3b/0x70
-[<0>] cleanup_mnt+0x43/0x70
-[<0>] sys_umount+0x48/0x90
-```
-
-为什么 `umount` 会卡死在 `obd_zombie_barrier()`？
-这背后是 Lustre 为防止内核 **Use-After-Free（内存释放后访问导致整机 Panic）** 构筑的最后防线：
-
-1. 当客户端卸载时，需要依次销毁所有的 `osc` 和 `mdc` 设备；
-2. 但是，每个设备内部都维护着 `obd_refcount` 引用计数。如果有任何用户态进程仍然打开着文件、或者网络中有尚未收回的孤儿 RPC（Orphan RPC）、或者有锁尚未完成撤销，引用计数就无法归零；
-3. 如果此时强行 `kfree(obd)`，一旦后续网卡驱动收到迟到的报文尝试访问该设备指针，Linux 内核就会立即崩溃转储（Kernel Crash Dump）！
-
-### 7.5.2 救赎之路：obd_zombie 异步收割机制
-
-查看源码 [`lustre/obdclass/genops.c:1860-1890`](https://github.com/lustre/lustre-release/blob/master/lustre/obdclass/genops.c#L1860-L1890)：
+#### OBP 调用宏机制
+在内核源码中，上层模块严禁直接以 `dev->obd_ops->op(...)` 形式裸调操作表指针。Lustre 统一通过 `OBP(dev, op)` 保护宏展开调用：
 
 ```c
-/* 挂入僵尸链表，交由工作队列异步释放 */
-static void obd_zombie_export_add(struct obd_export *exp);
-static void obd_zombie_import_add(struct obd_import *imp);
+#define OBP(dev, op)                                    \
+    ({                                                  \
+        LASSERT(dev != NULL);                           \
+        LASSERT(dev->obd_ops != NULL);                  \
+        LASSERT(dev->obd_ops->op != NULL);              \
+        dev->obd_ops->op;                               \
+    })
+```
+该宏在编译期与调试运行时注入严格的前置条件断言（`LASSERT`），在指针为空或未初始化时立刻拦截崩溃，杜绝空指针引发内核 OOPS。
 
-/* 等待所有僵尸 import/export 队列完全清空的安全屏障 */
-void obd_zombie_barrier(void)
-{
-	if (obd_zombie_impexp_cull()) {
-		wait_event(obd_zombie_waitq,
-			   !obd_zombie_impexp_cull());
-	}
-}
-EXPORT_SYMBOL(obd_zombie_barrier);
+---
+
+## 7.3 全局设备注册表与生命周期
+
+内核中运行的全部 OBD 实例由 `obdclass/genops.c` 统一管理。
+
+```mermaid
+flowchart TD
+    ARRAY["全局设备表 struct obd_device *obd_devs[MAX_OBD_DEVICES]"]
+    
+    subgraph Minor_Slots ["设备槽位 (Minor 0 ~ MAX-1)"]
+        SLOT0["Slot 0: MGC 实例 (mgc_obd)"]
+        SLOT1["Slot 1: MDC 实例 (mdc_obd)"]
+        SLOT2["Slot 2: OSC 实例 (osc_obd_0)"]
+        SLOT3["Slot 3: LOV 聚合实例 (lov_obd)"]
+    end
+    
+    ARRAY --> SLOT0
+    ARRAY --> SLOT1
+    ARRAY --> SLOT2
+    ARRAY --> SLOT3
 ```
 
-- 当 `class_disconnect()` 被调用时，Lustre 不会就地同步销毁连接，而是将其移入 `obd_zombie` 僵尸链表；
-- 后台内核工作队列 `obd_zombie_exp_cull` 与 `obd_zombie_imp_cull` 异步轮询，只有当所有的底层网络事件彻底注销后才释放内存；
-- `obd_zombie_barrier()` 负责卡住主卸载线程，直到所有幽灵引用彻底灰飞烟灭。
+- **Minor 索引槽位分配**：每个新设备分配一个全局递增的整数编号 `obd_minor`，系统最大支持通过 `obd_devs` 管理数千个动态设备实例。
+- **引用计数生命周期（`obd_refcount`）**：只有当所有连接的 Export 全部断开且内部子系统完全释放后，设备的内存结构体才被真正销毁。
 
-**运维排查处方**：
-当遇到 `umount` 卡在 `obd_zombie_barrier` 时，千万不要强行重启主机！可以通过以下手段快速找出卡住引用的罪魁祸首：
+---
+
+## 7.4 OBD 设备全生命周期状态机
+
+从系统挂载到安全卸载，OBD 设备遵循严格的五阶段生命周期管理：
+
+![MGC OBD 设备完整生命周期状态机](../images/internals_fig11_mgc_lifecycle_workflow.png)
+
+*图 7-3: MGC 设备完整生命周期工作流：从 attach、setup 到配置解析与卸载销毁（来源：Understanding Lustre Internals）*
+
+```mermaid
+stateDiagram-v2
+    [*] --> ATTACHED: class_attach()<br/>分配内存并取得 minor 槽位
+    
+    ATTACHED --> SETUP: class_setup()<br/>解析配置参数并初始化子系统
+    
+    SETUP --> PRECLEANUP: class_precleanup()<br/>开始卸载，中断所有在途连接
+    
+    PRECLEANUP --> CLEANED: class_cleanup()<br/>释放锁命名空间与内部缓冲区
+    
+    CLEANED --> DETACHED: class_detach()<br/>归还 minor 槽位
+    DETACHED --> [*]: 释放 struct obd_device 内存
+```
+
+### 1. `class_attach`：设备实例分配
+解析配置指令中的设备类型名（如 `osc`）与设备名。在全局数组中找到未占用的 `minor` 槽位，分配 `struct obd_device` 内存并完成基础锁与等待队列的初始化。
+
+![class_attach 函数执行流程图](../images/internals_fig12_class_attach_workflow.png)
+
+*图 7-4: class_attach() 核心执行路径：设备槽位分配与基础环境构造（来源：Understanding Lustre Internals）*
+
+### 2. `class_setup`：驱动装配与就绪
+调用对应驱动的具体 `obd_ops->setup()` 函数。
+- 若是服务端驱动（如 MDT/OST），分配本地磁盘 I/O 资源，启动 PtlRPC 服务线程池；
+- 若是客户端驱动（如 OSC/MDC），初始化 LDLM 锁命名空间（`obd_namespace`），建立到目标服务器的通信底座。
+
+![class_setup 函数执行流程图](../images/internals_fig13_class_setup_workflow.png)
+
+*图 7-5: class_setup() 执行工作流：驱动特定配置与服务线程激活（来源：Understanding Lustre Internals）*
+
+### 3. `class_precleanup`：断开外部连接
+由卸载流程触发。将 `obd_stopping` 置为 1，拒绝接收新的上层业务请求；强行断开并清理所有客户端的 Export 会话，触发在途异步请求的快速失败。
+
+![Lustre 客户端卸载触发 class_cleanup 流程](../images/internals_fig14_unmount_class_cleanup.png)
+
+*图 7-6: Lustre 客户端卸载触发 class_cleanup 流程与 MGC 销毁时序（来源：Understanding Lustre Internals）*
+
+### 4. `class_cleanup`：资源销毁
+调用驱动的 `obd_ops->cleanup()`。停止服务线程池，销毁对应的 LDLM 锁命名空间，释放请求缓冲区（RQBD）与内部哈希表。
+
+![class_cleanup 内部资源回收状态机](../images/internals_fig15_class_cleanup_workflow.png)
+
+*图 7-7: class_cleanup() 核心流程：引用归零与底层子系统注销（来源：Understanding Lustre Internals）*
+
+### 5. `class_detach`：全局解挂
+从全局 `obd_devs` 数组中移除设备指针，归还 `minor` 编号，释放 `struct obd_device` 占用的内核内存。
+
+---
+
+## 7.5 Export 与 Import 核心通信实体
+
+在 Lustre 的客户端与服务端之间，所有通信通过一对互为镜像的核心实体进行管理：
+
+![Lustre 客户端 Import 与服务端 Export 核心配对关系](../images/internals_fig16_import_export_pair.png)
+
+*图 7-8: Lustre 客户端与服务端之间的 Import / Export 映射拓扑与连接管道（来源：Understanding Lustre Internals）*
+
+```mermaid
+flowchart LR
+    subgraph Client ["客户端节点 (Client)"]
+        CL["本地 OSC 设备"]
+        IMP["struct obd_import (Import)<br/>· 维护目标服务端 NID<br/>· 请求序列号 (Transno/XID)<br/>· 恢复状态机 (DISCON/FULL/REPLAY)"]
+        CL --> IMP
+    end
+
+    subgraph Network ["LNet 网络"]
+        PTL["Portal RPC"]
+    end
+
+    subgraph Server ["存储服务端 (OSS / MDS)"]
+        EXP["struct obd_export (Export)<br/>· 维护客户端唯一标识 (Client UUID)<br/>· 客户端已授权锁链表 (exp_locks)<br/>· 最后通信时间戳 (exp_last_request)"]
+        SRV["本地 OST 设备"]
+        EXP --> SRV
+    end
+
+    IMP <==> PTL <==> EXP
+```
+
+### 1. `struct obd_import`（客户端视角）
+表示客户端指向远端目标服务端的单向通信管道。
+- 负责维护到目标节点的 LNet NID、网络连接状态以及最后处理的事务编号（Transno）。
+- 驱动容错恢复状态机：当检测到服务端失联时，`import` 状态在 `DISCONN`、`CONNECTING`、`REPLAY` 之间流转。
+
+### 2. `struct obd_export`（服务端视角）
+表示服务端接纳的某一个特定客户端的在线会话实体。
+- 服务端为每个成功挂载的客户端分配一个 `struct obd_export`，挂载在 `obd_device` 的哈希表中。
+- **锁资产记账**：记录该客户端当前持有的所有 LDLM 锁（`exp_locks` 链表）。当客户端主动关闭或被踢出集群时，服务端根据 Export 迅速撤销并回收其占有的全部锁资源。
+- **驱逐判定（Eviction）**：记录最后活跃时间。若在租约期内未收到该 Export 的任何请求或 Ping 心跳，触发驱逐（Eviction）。
+
+![MDT 与 OST 之间经由 OSP 的服务端跨节点通信](../images/internals_fig17_ost_mdt_osp_communication.png)
+
+*图 7-9: 服务端协同通信：MDT 与 OST 之间通过 OSP 虚拟设备与 Import/Export 建立通信管道（来源：Understanding Lustre Internals）*
+
+---
+
+## 7.6 生产实战：设备状态检查与故障诊断
+
+### 常用状态查看命令
 
 ```bash
-# 1. 检查是否有用户进程残留未退出的工作目录或文件描述符
-lsof +D /mnt/lustre
-fuser -vm /mnt/lustre
+# 1. 列出当前节点装配的全部 OBD 设备及其运行状态
+lctl dl
+# 典型输出:
+#  0 UP mgc MGC10.10.1.1@o2ib0 c7a5f6e8-1111-2222-3333-444455556666 5
+#  1 UP ost OSS OSS_uuid 3
+#  2 UP obdfilter testfs-OST0000 testfs-OST0000_UUID 4
 
-# 2. 检查特定设备上仍然持有的活跃 Export 数量与未释放锁
-cat /proc/fs/lustre/osc/lustre-OST0000-osc-*/num_exports
-cat /proc/fs/lustre/ldlm/namespaces/lustre-OST0000-osc-*/lock_unused_count
+# 2. 查看特定 OST 上的在线客户端 Export 数量与详情
+lctl get_param obdfilter.testfs-OST0000.num_exports
 
-# 3. 强制触发客户端失效并强行斩断连接 (慎用: 会导致脏数据丢失)
-lctl set_param osc.lustre-OST0000-osc-*.import=deactivate
+# 3. 检查特定客户端的 Export 状态与连接时间戳
+lctl get_param obdfilter.testfs-OST0000.exports.*.last_request_time
 ```
 
 ---
 
-## 7.6 OBD 设备生命周期与卸载调优 Checklist
+## 7.7 生产事故案例：僵尸 Export 引用泄漏导致存储节点卸载挂死
 
-在维护复杂的多 OBD 堆栈或编写底层存储驱动时，必须遵守以下核验准则：
+### 7.7.1 故障现象
 
-- [ ] **引用计数配对审计（obd_get / obd_put）**：
-  任何获取 `struct obd_device` 指针的代码路径，必须严格通过 `class_incref()` 与 `class_decref()` 对称配对。严禁在无持有引用的情况下跨函数调用异步回调。
-- [ ] **强行卸载（umount -f）安全前提**：
-  执行强制卸载前，先运行 `fuser -km /mnt/lustre` 杀死残留的工作目录进程，防止未写回脏页使引用计数陷入死等。
-- [ ] **全局 XArray 设备树容量核查**：
-  当集群 OST 数量超过 1,000 个时，确认 `obd_devs` 索引无碎片溢出，检查 `/proc/fs/lustre/devices` 确保每个设备的运行状态（Status）均为 `UP` 而非 `RO` 或 `IN`。
-- [ ] **幽灵连接主动剥离（Import Deactivation）**：
-  若某台 OSS 彻底物理烧毁无法开机，在客户端卸载卡死时，使用 `lctl set_param osc.*-OSTxxxx-*.import=deactivate` 主动切断死循环等待。
+在对某台 OSS 存储节点执行滚动维护升级时，管理员执行 `umount /mnt/ost0` 尝试安全卸载 OST 设备。然而卸载命令彻底挂死在内核中，终端进程陷入 D 状态，等待超过 20 分钟仍未退出。
+
+内核日志（`dmesg`）持续以 10 秒间隔输出告警：
+```text
+LustreError: 12345:0:(genops.c:1342:class_cleanup()) obdfilter-testfs-OST0002: has 1 remaining export!
+LustreError: 12345:0:(genops.c:1345:class_cleanup()) obdfilter-testfs-OST0002: refcount is 2
+```
+
+### 7.7.2 排查过程
+
+1. **查看堆栈**：  
+   `cat /proc/<umount_pid>/stack` 显示 `umount` 进程卡死在 `class_cleanup()` 中的循环等待：
+   ```text
+   [<0>] schedule_timeout+0x...
+   [<0>] class_cleanup+0x...
+   [<0>] lustre_stop_simple+0x...
+   [<0>] osd_shutdown+0x...
+   ```
+2. **分析 Export 残留**：  
+   在卸载阶段，`class_precleanup()` 已经向所有注册的 Export 发送了断开指令。然而，检查该 OST 的残余 Export 时发现，存在一个特殊的内部 Export：来自于 MDT 预分配对象的内部同步链路（由 MDT 的 OSP 代理设备建立）。由于网络交换机在维护时提前切断了管理网段，MDT 的 OSP 客户端未能在超时时间内发送注销确认，导致该 Export 的引用计数始终大于 0。
+3. **机理分析**：  
+   `class_cleanup()` 具有严密的内存防御逻辑：在销毁 `obd_device` 之前，必须确保所有外部借出的 Export 已经完全释放归零。如果强行释放设备内存，会导致后续延迟到达的网络报文在访问野指针时引发系统 Kernel Panic。因此系统选择安全阻塞等待。
+
+### 7.7.3 修复措施与成效
+
+通过 `lctl` 工具向内核注入强制销毁标志（`obd_force`），强行斩断残余 Export：
+
+```bash
+# 激活指定设备的强制中止模式，旁路引用计数保护
+lctl --device testfs-OST0002 force
+```
+
+执行后，内核立即释放受损的僵尸 Export，`umount` 进程顺利完成卸载，避免了由于进程挂死导致的服务器强制硬件断电重启。
 
 ---
 
-## 7.7 核心源码对照表
+## 7.8 运维基线检查清单
 
-| 核心抽象 / 结构体 | 源码文件 | 核心函数 / 机制 | 生产定位与架构职责 |
-| :--- | :--- | :--- | :--- |
-| **设备总纲** | [`obd.h`](https://github.com/lustre/lustre-release/blob/master/lustre/include/obd.h) | `struct obd_device` | 经典对象设备容器，集成 UUID、锁、哈希与状态机 |
-| **操作契约** | [`obd.h`](https://github.com/lustre/lustre-release/blob/master/lustre/include/obd.h) | `struct obd_ops` | 统管生命周期、元数据属性与 `o_preprw` 二阶段 IO |
-| **拓扑管理器** | [`genops.c`](https://github.com/lustre/lustre-release/blob/master/lustre/obdclass/genops.c) | `obd_devs` (XArray) | Linux 现代无锁 RCU 全局设备树与动态分配 |
-| **配置解析引擎** | [`obd_config.c`](https://github.com/lustre/lustre-release/blob/master/lustre/obdclass/obd_config.c) | `class_config_parse_llog()` | 读取集群 MGS 日志并动态装配 OBD 堆栈积木 |
-| **僵尸安全屏障** | [`genops.c`](https://github.com/lustre/lustre-release/blob/master/lustre/obdclass/genops.c) | `obd_zombie_barrier()` | 异步收割幽灵引用，彻底根除 UAF 导致的内核 Panic |
-| **连接凭证** | [`obd.h`](https://github.com/lustre/lustre-release/blob/master/lustre/include/obd.h) | `struct obd_import` / `obd_export` | 跨网络客户端与服务端孪生会话抽象 |
+- [ ] **卸载前检查 Export 水位**：在对 OSS/MDS 执行关机前，先执行 `lctl get_param *.testfs-*.num_exports`，观察活跃客户端数量是否已降至极低水平。
+- [ ] **规范卸载流程**：严格遵循“先停客户端挂载 $\rightarrow$ 再停 OST $\rightarrow$ 次停 MDT $\rightarrow$ 最后停 MGS”的顺序操作，严禁在客户端运行高吞吐 I/O 时直接关停服务端底层设备。
+- [ ] **监控 `obd_devs` 槽位占用率**：大规模超算集群中，定期检查 `lctl dl | wc -l`，防止长期运行产生的大量临时设备实例耗尽内核预设的 Minor 槽位。
 
 ---
 
-## 7.7 本章小结
+## 本章小结
 
-在本章中，我们解构了 Lustre 最基础的积木架构 —— OBD 分层模型：
-1. **面向对象设备（OBD）取代了传统块设备**，使得存储服务以对象（FID + Extent）为边界实现了彻底解耦；
-2. **`obd_device` 与 `obd_ops` 构成了统一契约**，让 `lmv`、`lov`、`osc`、`mdc` 可以像乐高积木一样无缝叠加；
-3. **现代 XArray 设备树赋予了集群极高的并发检索性能**，而 `obd_zombie` 屏障则在狂暴的网络波动与动态卸载中坚守着内核内存安全底线。
-
-然而，随着 Lustre 演进至 2.x 时代，传统单一的 `obd_ops` 逐渐显现出历史局限：所有的操作被硬编码在一个扁平的函数表中，难以优雅地支持多元数据分片、数据条带镜像（FLR）与复杂的事务嵌套。
-在下一章 [第八章：现代对象栈模型：lu_object、dt_device 与 md_device](08-lu-object.md) 中，我们将探索 Lustre 现代内核重构的巅峰之作 —— **`lu_object` 面向对象分层体系**！
+OBD 分层模型是 Lustre 存储架构的基础设计。它将复杂的分布式存储栈划分为职责单一的抽象设备层，通过标准的 `obd_ops` 操作表屏蔽底层细节；通过全局设备管理与五阶段生命周期状态机，保证了内核模块在动态装配与卸载时的内存安全；通过 Import 与 Export 实体建立起分布式客户端与服务端的强类型契约与锁资源记账机制。这一体系为现代 `lu_object` 复合对象栈与分布式元数据管理提供了坚实的运行底座。
