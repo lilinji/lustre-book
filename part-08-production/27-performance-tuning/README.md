@@ -1,0 +1,23 @@
+# 第 27 章：全栈性能调优与 Lustre 基准测试套件
+
+> **本章核心源码与工具**：  
+> - `lustre-iokit`：官方存储性能基准测试工具包（`sgpdd-survey`、`obdfilter-survey`、`ost-survey`、`mds-survey`）  
+> - `lnet/klnds/o2iblnd/o2iblnd.c`：InfiniBand / RoCE 队列深度、映射描述符与信用流控实现  
+> - `lustre/osc/osc_request.c`：在途 RPC 并发度（`max_rpcs_in_flight`）与脏页配额控制  
+> - `lustre/llite/rw.c`：客户端自适应预读窗口（`max_read_ahead_mb`）算法  
+> - `lustre/mdt/mdt_handler.c`：服务端元数据并发工作线程与提交时共享（COS）机制  
+> - `lustre/utils/mkfs_lustre.c`：底层格式化参数与块设备物理条带对齐实现  
+
+---
+
+## 本章核心小节导读
+
+- [27.1 全栈性能调优分层架构](27.1.md)
+- [27.2 性能基准测试套件：Lustre I/O Kit（lustre-iokit）](27.2.md)
+- [27.3 网络层调优：打破 LNet 吞吐瓶颈](27.3.md)
+- [27.4 客户端与 RPC 并发层调优：释放并行条带潜能](27.4.md)
+- [27.5 元数据层性能调优：提交时共享锁（COS）与高并发](27.5.md)
+- [27.6 操作系统平台与硬件基线调优](27.6.md)
+- [27.7 生产事故案例：CPU 节能调节器导致元数据小文件延迟翻倍](27.7.md)
+- [27.8 全栈性能调优 运维基线检查清单](27.8.md)
+- [本章小结：全栈性能调优 核心思考与自检](summary.md)

@@ -1,7 +1,12 @@
 # mdBook build output
 dist/
+# mdPress build output
+_book/
+*.html
 # Source PDFs and local extracted materials
 book/
+_monolithic_backup/
+*.bak
 
 
 # Dependencies

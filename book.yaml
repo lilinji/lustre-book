@@ -1,0 +1,23 @@
+book:
+  title: "大话 Lustre：超大规模并行文件系统的内核实现与架构设计"
+  subtitle: "distributed file system Journey to the West"
+  author: "Ringi"
+  version: "2.16+"
+  language: "zh-CN"
+  description: "Lustre 分布式文件系统深度剖析：从内核驱动、LNet、LDLM、DNE、PFL/FLR 到 GDS 与生产容灾"
+  cover:
+    image: "ringi-lustre-cover.jpg"
+
+style:
+  theme: "claude"
+  page_size: "A4"
+  custom_css: "theme/claude.css"
+
+output:
+  filename: "Lustre_分布式文件系统_Claude风格.pdf"
+  toc: true
+  toc_max_depth: 3
+  cover: true
+  formats:
+    - site
+    - html

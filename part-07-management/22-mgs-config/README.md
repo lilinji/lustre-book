@@ -1,0 +1,21 @@
+# 第 22 章：MGS 与动态配置分发中心
+
+> **本章核心源码文件**：  
+> - `lustre/mgs/mgs_handler.c`：管理服务器（MGS）RPC 调度、目标注册（`mgs_target_reg()`）与配置查询处理  
+> - `lustre/mgs/mgs_llog.c`：配置日志（Config Log）在底层 LLOG 中的生成、追加与解析实现  
+> - `lustre/mgc/mgc_request.c`：管理客户端（MGC）配置订阅、更新监听与本地应用实现  
+> - `lustre/obdclass/obd_config.c`：配置指令（`lcfg`）解析器、设备树动态装配与参数刷新  
+> - `lustre/utils/tunefs.c`：`tunefs.lustre` 磁盘元参数修改与 `writeconf` 实现  
+
+---
+
+## 本章核心小节导读
+
+- [22.1 MGS 的管理定位与集群自举流程（Bootstrap）](22.1.md)
+- [22.2 MGC 初始化与设备装配调用栈](22.2.md)
+- [22.3 底层配置日志格式：LLOG 与 lcfg 指令流](22.3.md)
+- [22.4 动态参数全网广播：配置锁（Config Lock）机制](22.4.md)
+- [22.5 生产实战：MGS 动态配置 参数调优与监控指标](22.5.md)
+- [22.6 生产事故案例：MGS 配置日志损坏导致全集群瘫痪与 writeconf 紧急自愈](22.6.md)
+- [22.7 MGS 动态配置 运维基线检查清单](22.7.md)
+- [本章小结：MGS 动态配置 核心思考与自检](summary.md)

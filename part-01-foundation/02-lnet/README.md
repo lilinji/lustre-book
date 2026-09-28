@@ -1,0 +1,25 @@
+# 第 2 章：LNet（Lustre Network）通信引擎：构建集群血管
+
+> **本章核心源码文件**：  
+> - `include/uapi/linux/lnet/lnet-types.h` / `lnet-idl.h`：NID 结构与 LNet 线控报文头协议  
+> - `lnet/lnet/api-ni.c`：网络接口（LNet NI）初始化与驱动适配层  
+> - `lnet/lnet/peer.c`：对等体（Peer）管理、动态发现与健康检查（Health Check）  
+> - `lnet/lnet/router.c`：跨网络路由器调度与缓冲池管理  
+> - `lnet/klnds/o2iblnd/o2iblnd.c` / `o2iblnd.h`：InfiniBand / RoCE RDMA 传输驱动  
+> - `lnet/klnds/socklnd/socklnd.c` / `socklnd.h`：TCP/IP 套接字传输驱动  
+> - `lnet/utils/lnetconfig/liblnetconfig.c`：LNet 动态配置 C-API 库实现  
+
+---
+
+## 本章核心小节导读
+
+- [2.1 存储通信约束：高带宽、介质异构与协议栈开销](2.1.md)
+- [2.2 LNet 寻址模型：NID、Net 与 Peer](2.2.md)
+- [2.3 Portals 3.3 核心机制：ME、MD 与 EQ](2.3.md)
+- [2.4 Multi-Rail 多轨传输与健康自愈机制](2.4.md)
+- [2.5 传输驱动抽象：o2iblnd 与 socklnd](2.5.md)
+- [2.6 LNet 动态配置 C-API 与 lnetctl 体系](2.6.md)
+- [2.7 生产实战：LNet Self-Test（lst）全网基准测试](2.7.md)
+- [2.8 生产事故案例：Multi-Rail 流量倾斜引发信用额度耗尽雪崩](2.8.md)
+- [2.9 LNet 运维基线检查清单](2.9.md)
+- [本章小结：LNet 核心思考与自检](summary.md)
