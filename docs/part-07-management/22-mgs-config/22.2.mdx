@@ -1,0 +1,18 @@
+---
+title: "22.2 MGC 初始化与设备装配调用栈"
+description: "客户端或存储服务端在启动时，其驱动层必须首先实例化 MGC（Management Client） 设备，以拉取配置日志。"
+---
+
+# 22.2 MGC 初始化与设备装配调用栈
+
+客户端或存储服务端在启动时，其驱动层必须首先实例化 **MGC（Management Client）** 设备，以拉取配置日志。
+
+![MGC 初始化与设置核心函数调用图](/images/internals_fig08_mgc_setup_callgraph.png)
+
+如图 19-1 所示，`class_setup()` 驱动的 MGC 初始化流经一系列明确的内核函数调用：
+1. **`mgc_setup()`**：分配并初始化本地 MGC 的私有数据结构，建立指向 MGS 的网络通信句柄（Import）；
+2. **`mgc_llog_init()`**：初始化本地 LLOG 日志处理上下文，准备接收二进制格式的配置流；
+3. **`ptlrpc_connect_import()`**：与远端 MGS 建立 Portal RPC 会话，校验服务端版本并同步网络超时基线。
+
+---
+

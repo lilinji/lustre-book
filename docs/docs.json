@@ -1,0 +1,544 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "大话 Lustre：超大规模并行文件系统",
+  "theme": "maple",
+  "colors": {
+    "primary": "#DA7756",
+    "light": "#E07A5F",
+    "dark": "#C15F3D"
+  },
+  "background": {
+    "color": {
+      "light": "#FAF9F5",
+      "dark": "#181816"
+    }
+  },
+  "navbar": {
+    "links": [
+      {
+        "type": "github",
+        "href": "https://github.com/lustre/lustre-release"
+      }
+    ]
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/lustre/lustre-release"
+    }
+  },
+  "favicon": "/favicon.svg",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "通信与 RPC (卷一~二)",
+        "groups": [
+          {
+            "group": "全书导读与上手实战",
+            "pages": [
+              "index",
+              "getting-started/quickstart"
+            ]
+          },
+          {
+            "group": "第一卷：通信基石与内核抽象层 (Foundation & LNet)",
+            "pages": [
+              {
+                "group": "第 1 章：高性能内核基础设施：libcfs 与平台兼容抽象",
+                "root": "part-01-foundation/01-libcfs/README",
+                "expanded": false,
+                "pages": [
+                  "part-01-foundation/01-libcfs/1.1",
+                  "part-01-foundation/01-libcfs/1.2",
+                  "part-01-foundation/01-libcfs/1.3",
+                  "part-01-foundation/01-libcfs/1.4",
+                  "part-01-foundation/01-libcfs/1.5",
+                  "part-01-foundation/01-libcfs/1.6",
+                  "part-01-foundation/01-libcfs/1.7",
+                  "part-01-foundation/01-libcfs/1.8",
+                  "part-01-foundation/01-libcfs/summary"
+                ]
+              },
+              {
+                "group": "第 2 章：LNet（Lustre Network）通信引擎：构建集群血管",
+                "root": "part-01-foundation/02-lnet/README",
+                "expanded": false,
+                "pages": [
+                  "part-01-foundation/02-lnet/2.1",
+                  "part-01-foundation/02-lnet/2.2",
+                  "part-01-foundation/02-lnet/2.3",
+                  "part-01-foundation/02-lnet/2.4",
+                  "part-01-foundation/02-lnet/2.5",
+                  "part-01-foundation/02-lnet/2.6",
+                  "part-01-foundation/02-lnet/2.7",
+                  "part-01-foundation/02-lnet/2.8",
+                  "part-01-foundation/02-lnet/2.9",
+                  "part-01-foundation/02-lnet/summary"
+                ]
+              },
+              {
+                "group": "第 3 章：统一线控协议与数据包布局 (Wire Protocol)",
+                "root": "part-01-foundation/03-wire-protocol/README",
+                "expanded": false,
+                "pages": [
+                  "part-01-foundation/03-wire-protocol/3.1",
+                  "part-01-foundation/03-wire-protocol/3.2",
+                  "part-01-foundation/03-wire-protocol/3.3",
+                  "part-01-foundation/03-wire-protocol/3.4",
+                  "part-01-foundation/03-wire-protocol/3.5",
+                  "part-01-foundation/03-wire-protocol/3.6",
+                  "part-01-foundation/03-wire-protocol/3.7",
+                  "part-01-foundation/03-wire-protocol/3.8",
+                  "part-01-foundation/03-wire-protocol/summary"
+                ]
+              }
+            ]
+          },
+          {
+            "group": "第二卷：分布式通信与并发控制骨架 (Portal RPC & LDLM)",
+            "pages": [
+              {
+                "group": "第 4 章：Portal RPC 异步通信框架与请求状态机",
+                "root": "part-02-rpc-and-locks/04-portal-rpc/README",
+                "expanded": false,
+                "pages": [
+                  "part-02-rpc-and-locks/04-portal-rpc/4.1",
+                  "part-02-rpc-and-locks/04-portal-rpc/4.2",
+                  "part-02-rpc-and-locks/04-portal-rpc/4.3",
+                  "part-02-rpc-and-locks/04-portal-rpc/4.4",
+                  "part-02-rpc-and-locks/04-portal-rpc/4.5",
+                  "part-02-rpc-and-locks/04-portal-rpc/4.6",
+                  "part-02-rpc-and-locks/04-portal-rpc/4.7",
+                  "part-02-rpc-and-locks/04-portal-rpc/4.8",
+                  "part-02-rpc-and-locks/04-portal-rpc/summary"
+                ]
+              },
+              {
+                "group": "第 5 章：分布式容错恢复与自适应超时 (Adaptive Timeouts)",
+                "root": "part-02-rpc-and-locks/05-recovery-at/README",
+                "expanded": false,
+                "pages": [
+                  "part-02-rpc-and-locks/05-recovery-at/5.1",
+                  "part-02-rpc-and-locks/05-recovery-at/5.2",
+                  "part-02-rpc-and-locks/05-recovery-at/5.3",
+                  "part-02-rpc-and-locks/05-recovery-at/5.4",
+                  "part-02-rpc-and-locks/05-recovery-at/5.5",
+                  "part-02-rpc-and-locks/05-recovery-at/5.6",
+                  "part-02-rpc-and-locks/05-recovery-at/5.7",
+                  "part-02-rpc-and-locks/05-recovery-at/5.8",
+                  "part-02-rpc-and-locks/05-recovery-at/summary"
+                ]
+              },
+              {
+                "group": "第 6 章：LDLM 分布式锁管理器：意图锁与并发控制深度解密",
+                "root": "part-02-rpc-and-locks/06-ldlm-locks/README",
+                "expanded": false,
+                "pages": [
+                  "part-02-rpc-and-locks/06-ldlm-locks/6.1",
+                  "part-02-rpc-and-locks/06-ldlm-locks/6.2",
+                  "part-02-rpc-and-locks/06-ldlm-locks/6.3",
+                  "part-02-rpc-and-locks/06-ldlm-locks/6.4",
+                  "part-02-rpc-and-locks/06-ldlm-locks/6.5",
+                  "part-02-rpc-and-locks/06-ldlm-locks/6.6",
+                  "part-02-rpc-and-locks/06-ldlm-locks/6.7",
+                  "part-02-rpc-and-locks/06-ldlm-locks/6.8",
+                  "part-02-rpc-and-locks/06-ldlm-locks/summary"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "对象与存储引擎 (卷三~五)",
+        "groups": [
+          {
+            "group": "第三卷：对象存储设备抽象与基础组件 (OBD Foundation)",
+            "pages": [
+              {
+                "group": "第 7 章：OBD 分层模型与设备生命周期",
+                "root": "part-03-obd-foundation/07-obd-model/README",
+                "expanded": false,
+                "pages": [
+                  "part-03-obd-foundation/07-obd-model/7.1",
+                  "part-03-obd-foundation/07-obd-model/7.2",
+                  "part-03-obd-foundation/07-obd-model/7.3",
+                  "part-03-obd-foundation/07-obd-model/7.4",
+                  "part-03-obd-foundation/07-obd-model/7.5",
+                  "part-03-obd-foundation/07-obd-model/7.6",
+                  "part-03-obd-foundation/07-obd-model/7.7",
+                  "part-03-obd-foundation/07-obd-model/7.8",
+                  "part-03-obd-foundation/07-obd-model/summary"
+                ]
+              },
+              {
+                "group": "第 8 章：现代对象栈模型：lu_object 与两阶段事务契约",
+                "root": "part-03-obd-foundation/08-lu-object/README",
+                "expanded": false,
+                "pages": [
+                  "part-03-obd-foundation/08-lu-object/8.1",
+                  "part-03-obd-foundation/08-lu-object/8.2",
+                  "part-03-obd-foundation/08-lu-object/8.3",
+                  "part-03-obd-foundation/08-lu-object/8.4",
+                  "part-03-obd-foundation/08-lu-object/8.5",
+                  "part-03-obd-foundation/08-lu-object/8.6",
+                  "part-03-obd-foundation/08-lu-object/8.7",
+                  "part-03-obd-foundation/08-lu-object/summary"
+                ]
+              },
+              {
+                "group": "第 9 章：FID 体系与分布式命名空间路由",
+                "root": "part-03-obd-foundation/09-fid-concept/README",
+                "expanded": false,
+                "pages": [
+                  "part-03-obd-foundation/09-fid-concept/9.1",
+                  "part-03-obd-foundation/09-fid-concept/9.2",
+                  "part-03-obd-foundation/09-fid-concept/9.3",
+                  "part-03-obd-foundation/09-fid-concept/9.4",
+                  "part-03-obd-foundation/09-fid-concept/9.5",
+                  "part-03-obd-foundation/09-fid-concept/9.6",
+                  "part-03-obd-foundation/09-fid-concept/9.7",
+                  "part-03-obd-foundation/09-fid-concept/9.8",
+                  "part-03-obd-foundation/09-fid-concept/9.9",
+                  "part-03-obd-foundation/09-fid-concept/summary"
+                ]
+              }
+            ]
+          },
+          {
+            "group": "第四卷：元数据集群与分布式命名空间 (Metadata Services)",
+            "pages": [
+              {
+                "group": "第 10 章：MDS 与 MDT 核心架构与元数据流水线",
+                "root": "part-04-metadata/10-mdt-internals/README",
+                "expanded": false,
+                "pages": [
+                  "part-04-metadata/10-mdt-internals/10.1",
+                  "part-04-metadata/10-mdt-internals/10.2",
+                  "part-04-metadata/10-mdt-internals/10.3",
+                  "part-04-metadata/10-mdt-internals/10.4",
+                  "part-04-metadata/10-mdt-internals/10.5",
+                  "part-04-metadata/10-mdt-internals/10.6",
+                  "part-04-metadata/10-mdt-internals/10.7",
+                  "part-04-metadata/10-mdt-internals/summary"
+                ]
+              },
+              {
+                "group": "第 11 章：DNE（Distributed Namespace Engine）多元数据水平扩展",
+                "root": "part-04-metadata/11-dne-architecture/README",
+                "expanded": false,
+                "pages": [
+                  "part-04-metadata/11-dne-architecture/11.1",
+                  "part-04-metadata/11-dne-architecture/11.2",
+                  "part-04-metadata/11-dne-architecture/11.3",
+                  "part-04-metadata/11-dne-architecture/11.4",
+                  "part-04-metadata/11-dne-architecture/11.5",
+                  "part-04-metadata/11-dne-architecture/11.6",
+                  "part-04-metadata/11-dne-architecture/11.7",
+                  "part-04-metadata/11-dne-architecture/summary"
+                ]
+              },
+              {
+                "group": "第 12 章：元数据变更日志（Changelogs）与数据保护",
+                "root": "part-04-metadata/12-changelogs/README",
+                "expanded": false,
+                "pages": [
+                  "part-04-metadata/12-changelogs/12.1",
+                  "part-04-metadata/12-changelogs/12.2",
+                  "part-04-metadata/12-changelogs/12.3",
+                  "part-04-metadata/12-changelogs/12.4",
+                  "part-04-metadata/12-changelogs/12.5",
+                  "part-04-metadata/12-changelogs/12.6",
+                  "part-04-metadata/12-changelogs/12.7",
+                  "part-04-metadata/12-changelogs/12.8",
+                  "part-04-metadata/12-changelogs/summary"
+                ]
+              },
+              {
+                "group": "第 13 章：企业级安全认证与 Nodemap 多租户虚拟化",
+                "root": "part-04-metadata/13-nodemap-security/README",
+                "expanded": false,
+                "pages": [
+                  "part-04-metadata/13-nodemap-security/13.1",
+                  "part-04-metadata/13-nodemap-security/13.2",
+                  "part-04-metadata/13-nodemap-security/13.3",
+                  "part-04-metadata/13-nodemap-security/13.4",
+                  "part-04-metadata/13-nodemap-security/13.5",
+                  "part-04-metadata/13-nodemap-security/13.6",
+                  "part-04-metadata/13-nodemap-security/13.7",
+                  "part-04-metadata/13-nodemap-security/summary"
+                ]
+              }
+            ]
+          },
+          {
+            "group": "第五卷：条带化并发数据 I/O 引擎 (Data Storage Path)",
+            "pages": [
+              {
+                "group": "第 14 章：OST 与 OSD 存储核心与底层引擎抉择",
+                "root": "part-05-data-storage/14-ost-osd/README",
+                "expanded": false,
+                "pages": [
+                  "part-05-data-storage/14-ost-osd/14.1",
+                  "part-05-data-storage/14-ost-osd/14.2",
+                  "part-05-data-storage/14-ost-osd/14.3",
+                  "part-05-data-storage/14-ost-osd/14.4",
+                  "part-05-data-storage/14-ost-osd/14.5",
+                  "part-05-data-storage/14-ost-osd/14.6",
+                  "part-05-data-storage/14-ost-osd/14.7",
+                  "part-05-data-storage/14-ost-osd/summary"
+                ]
+              },
+              {
+                "group": "第 15 章：文件条带化与现代布局演进 (PFL / FLR / DoM / SEL)",
+                "root": "part-05-data-storage/15-striping-pfl-flr/README",
+                "expanded": false,
+                "pages": [
+                  "part-05-data-storage/15-striping-pfl-flr/15.1",
+                  "part-05-data-storage/15-striping-pfl-flr/15.2",
+                  "part-05-data-storage/15-striping-pfl-flr/15.3",
+                  "part-05-data-storage/15-striping-pfl-flr/15.4",
+                  "part-05-data-storage/15-striping-pfl-flr/15.5",
+                  "part-05-data-storage/15-striping-pfl-flr/15.6",
+                  "part-05-data-storage/15-striping-pfl-flr/15.7",
+                  "part-05-data-storage/15-striping-pfl-flr/15.8",
+                  "part-05-data-storage/15-striping-pfl-flr/summary"
+                ]
+              },
+              {
+                "group": "第 16 章：分布式 I/O 流水线与缓存 Grant 机制",
+                "root": "part-05-data-storage/16-io-grant/README",
+                "expanded": false,
+                "pages": [
+                  "part-05-data-storage/16-io-grant/16.1",
+                  "part-05-data-storage/16-io-grant/16.2",
+                  "part-05-data-storage/16-io-grant/16.3",
+                  "part-05-data-storage/16-io-grant/16.4",
+                  "part-05-data-storage/16-io-grant/16.5",
+                  "part-05-data-storage/16-io-grant/16.6",
+                  "part-05-data-storage/16-io-grant/16.7",
+                  "part-05-data-storage/16-io-grant/summary"
+                ]
+              },
+              {
+                "group": "第 17 章：HSM 分层存储管理与对象存储云级下沉",
+                "root": "part-05-data-storage/17-hsm-tiering/README",
+                "expanded": false,
+                "pages": [
+                  "part-05-data-storage/17-hsm-tiering/17.1",
+                  "part-05-data-storage/17-hsm-tiering/17.2",
+                  "part-05-data-storage/17-hsm-tiering/17.3",
+                  "part-05-data-storage/17-hsm-tiering/17.4",
+                  "part-05-data-storage/17-hsm-tiering/17.5",
+                  "part-05-data-storage/17-hsm-tiering/17.6",
+                  "part-05-data-storage/17-hsm-tiering/17.7",
+                  "part-05-data-storage/17-hsm-tiering/summary"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "客户端与集群管控 (卷六~七)",
+        "groups": [
+          {
+            "group": "第六卷：客户端 VFS 装配与多协议网关 (Client Subsystem & Gateways)",
+            "pages": [
+              {
+                "group": "第 18 章：llite 与 Linux VFS 深度适配与生命周期",
+                "root": "part-06-client-subsystem/18-llite-vfs/README",
+                "expanded": false,
+                "pages": [
+                  "part-06-client-subsystem/18-llite-vfs/18.1",
+                  "part-06-client-subsystem/18-llite-vfs/18.2",
+                  "part-06-client-subsystem/18-llite-vfs/18.3",
+                  "part-06-client-subsystem/18-llite-vfs/18.4",
+                  "part-06-client-subsystem/18-llite-vfs/18.5",
+                  "part-06-client-subsystem/18-llite-vfs/18.6",
+                  "part-06-client-subsystem/18-llite-vfs/18.7",
+                  "part-06-client-subsystem/18-llite-vfs/18.8",
+                  "part-06-client-subsystem/18-llite-vfs/18.9",
+                  "part-06-client-subsystem/18-llite-vfs/summary"
+                ]
+              },
+              {
+                "group": "第 19 章：cl_object 客户端对象抽象层与 I/O 状态机",
+                "root": "part-06-client-subsystem/19-cl-object/README",
+                "expanded": false,
+                "pages": [
+                  "part-06-client-subsystem/19-cl-object/19.1",
+                  "part-06-client-subsystem/19-cl-object/19.2",
+                  "part-06-client-subsystem/19-cl-object/19.3",
+                  "part-06-client-subsystem/19-cl-object/19.4",
+                  "part-06-client-subsystem/19-cl-object/19.5",
+                  "part-06-client-subsystem/19-cl-object/19.6",
+                  "part-06-client-subsystem/19-cl-object/19.7",
+                  "part-06-client-subsystem/19-cl-object/summary"
+                ]
+              },
+              {
+                "group": "第 20 章：分布式缓存一致性与并发控制 (PCC / 分布式 mmap)",
+                "root": "part-06-client-subsystem/20-distributed-cache/README",
+                "expanded": false,
+                "pages": [
+                  "part-06-client-subsystem/20-distributed-cache/20.1",
+                  "part-06-client-subsystem/20-distributed-cache/20.2",
+                  "part-06-client-subsystem/20-distributed-cache/20.3",
+                  "part-06-client-subsystem/20-distributed-cache/20.4",
+                  "part-06-client-subsystem/20-distributed-cache/20.5",
+                  "part-06-client-subsystem/20-distributed-cache/20.6",
+                  "part-06-client-subsystem/20-distributed-cache/summary"
+                ]
+              },
+              {
+                "group": "第 21 章：多协议集群接入网关：CTDB、高可用 Samba 与 NFS-Ganesha",
+                "root": "part-06-client-subsystem/21-cluster-gateway-ctdb/README",
+                "expanded": false,
+                "pages": [
+                  "part-06-client-subsystem/21-cluster-gateway-ctdb/21.1",
+                  "part-06-client-subsystem/21-cluster-gateway-ctdb/21.2",
+                  "part-06-client-subsystem/21-cluster-gateway-ctdb/21.3",
+                  "part-06-client-subsystem/21-cluster-gateway-ctdb/21.4",
+                  "part-06-client-subsystem/21-cluster-gateway-ctdb/21.5",
+                  "part-06-client-subsystem/21-cluster-gateway-ctdb/21.6",
+                  "part-06-client-subsystem/21-cluster-gateway-ctdb/21.7",
+                  "part-06-client-subsystem/21-cluster-gateway-ctdb/summary"
+                ]
+              }
+            ]
+          },
+          {
+            "group": "第七卷：集群管控、配额治理与高可用 (Management & Governance)",
+            "pages": [
+              {
+                "group": "第 22 章：MGS 与动态配置分发中心",
+                "root": "part-07-management/22-mgs-config/README",
+                "expanded": false,
+                "pages": [
+                  "part-07-management/22-mgs-config/22.1",
+                  "part-07-management/22-mgs-config/22.2",
+                  "part-07-management/22-mgs-config/22.3",
+                  "part-07-management/22-mgs-config/22.4",
+                  "part-07-management/22-mgs-config/22.5",
+                  "part-07-management/22-mgs-config/22.6",
+                  "part-07-management/22-mgs-config/22.7",
+                  "part-07-management/22-mgs-config/summary"
+                ]
+              },
+              {
+                "group": "第 23 章：高可用架构（HA）与故障转移机制",
+                "root": "part-07-management/23-high-availability/README",
+                "expanded": false,
+                "pages": [
+                  "part-07-management/23-high-availability/23.1",
+                  "part-07-management/23-high-availability/23.2",
+                  "part-07-management/23-high-availability/23.3",
+                  "part-07-management/23-high-availability/23.4",
+                  "part-07-management/23-high-availability/23.5",
+                  "part-07-management/23-high-availability/23.6",
+                  "part-07-management/23-high-availability/23.7",
+                  "part-07-management/23-high-availability/summary"
+                ]
+              },
+              {
+                "group": "第 24 章：企业级磁盘配额系统与空间治理",
+                "root": "part-07-management/24-quota-governance/README",
+                "expanded": false,
+                "pages": [
+                  "part-07-management/24-quota-governance/24.1",
+                  "part-07-management/24-quota-governance/24.2",
+                  "part-07-management/24-quota-governance/24.3",
+                  "part-07-management/24-quota-governance/24.4",
+                  "part-07-management/24-quota-governance/24.5",
+                  "part-07-management/24-quota-governance/24.6",
+                  "part-07-management/24-quota-governance/24.7",
+                  "part-07-management/24-quota-governance/summary"
+                ]
+              },
+              {
+                "group": "第 25 章：分布式写屏障（Barrier）与集群级全局快照",
+                "root": "part-07-management/25-snapshot-barrier/README",
+                "expanded": false,
+                "pages": [
+                  "part-07-management/25-snapshot-barrier/25.1",
+                  "part-07-management/25-snapshot-barrier/25.2",
+                  "part-07-management/25-snapshot-barrier/25.3",
+                  "part-07-management/25-snapshot-barrier/25.4",
+                  "part-07-management/25-snapshot-barrier/25.5",
+                  "part-07-management/25-snapshot-barrier/25.6",
+                  "part-07-management/25-snapshot-barrier/summary"
+                ]
+              },
+              {
+                "group": "第 26 章：性能监控、指标度量与可观测性体系",
+                "root": "part-07-management/26-monitoring-observability/README",
+                "expanded": false,
+                "pages": [
+                  "part-07-management/26-monitoring-observability/26.1",
+                  "part-07-management/26-monitoring-observability/26.2",
+                  "part-07-management/26-monitoring-observability/26.3",
+                  "part-07-management/26-monitoring-observability/26.4",
+                  "part-07-management/26-monitoring-observability/26.5",
+                  "part-07-management/26-monitoring-observability/26.6",
+                  "part-07-management/26-monitoring-observability/summary"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "生产实战与演进 (卷八)",
+        "groups": [
+          {
+            "group": "第八卷：生产工程调优、容灾救援与 AI 前沿 (Production Engineering & AI Frontiers)",
+            "pages": [
+              {
+                "group": "第 27 章：全栈性能调优与 Lustre 基准测试套件",
+                "root": "part-08-production/27-performance-tuning/README",
+                "expanded": false,
+                "pages": [
+                  "part-08-production/27-performance-tuning/27.1",
+                  "part-08-production/27-performance-tuning/27.2",
+                  "part-08-production/27-performance-tuning/27.3",
+                  "part-08-production/27-performance-tuning/27.4",
+                  "part-08-production/27-performance-tuning/27.5",
+                  "part-08-production/27-performance-tuning/27.6",
+                  "part-08-production/27-performance-tuning/27.7",
+                  "part-08-production/27-performance-tuning/27.8",
+                  "part-08-production/27-performance-tuning/summary"
+                ]
+              },
+              {
+                "group": "第 28 章：生产灾难排查与 LFSCK 深度自愈手册",
+                "root": "part-08-production/28-disaster-recovery/README",
+                "expanded": false,
+                "pages": [
+                  "part-08-production/28-disaster-recovery/28.1",
+                  "part-08-production/28-disaster-recovery/28.2",
+                  "part-08-production/28-disaster-recovery/28.3",
+                  "part-08-production/28-disaster-recovery/28.4",
+                  "part-08-production/28-disaster-recovery/28.5",
+                  "part-08-production/28-disaster-recovery/28.6",
+                  "part-08-production/28-disaster-recovery/summary"
+                ]
+              },
+              {
+                "group": "第 29 章：面向 AI 时代的演进与前沿架构 (GDS / DAOS 反思)",
+                "root": "part-08-production/29-ai-frontiers/README",
+                "expanded": false,
+                "pages": [
+                  "part-08-production/29-ai-frontiers/29.1",
+                  "part-08-production/29-ai-frontiers/29.2",
+                  "part-08-production/29-ai-frontiers/29.3",
+                  "part-08-production/29-ai-frontiers/29.4",
+                  "part-08-production/29-ai-frontiers/summary"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

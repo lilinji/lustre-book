@@ -12,6 +12,25 @@
 
 ---
 
+## 📖 交互式文档预览 (Mintlify + Claude Docs 风格)
+
+本项目已全面升级为基于 **Mintlify** 驱动的现代交互式技术专著（融合 Anthropic Claude Docs 官方陶土色视觉规范、暗黑模式与 Diátaxis 内容架构）：
+
+```bash
+# 启动本地实时交互式文档预览
+npm run dev
+# 或直接运行
+npx mintlify dev --dir docs
+```
+本地预览地址：`http://localhost:3000`
+
+* **文档配置**：`docs/docs.json`
+* **文档源码**：`docs/`（含 8 卷 29 章共 271 篇完整 MDX 剖析文档及上手教程）
+* **视觉规范**：`DESIGN.md`
+* **写作规范**：`docs/style-guide.mdx`
+
+---
+
 ## 全书技术体系与系统全景架构
 
 ![Ringi x Lustre 分布式文件系统全景小剧场架构图](ringi-lustre-architecture.jpg)

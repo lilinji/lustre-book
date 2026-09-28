@@ -1,0 +1,42 @@
+---
+title: "9.8 生产事故案例：OI 索引表局部损坏导致文件元数据访问报 -ENOENT"
+description: "某智算中心发生双机电源断电故障，存储集群在紧急重启后，用户程序在读取某批特定训练样本文件时频繁抛出 I/O 错误： text No such file or directory (os error 2)  但通过 ls -l 查看该目录时，..."
+---
+
+# 9.8 生产事故案例：OI 索引表局部损坏导致文件元数据访问报 -ENOENT
+
+## 9.8.1 故障现象
+
+某智算中心发生双机电源断电故障，存储集群在紧急重启后，用户程序在读取某批特定训练样本文件时频繁抛出 I/O 错误：
+```text
+No such file or directory (os error 2)
+```
+但通过 `ls -l` 查看该目录时，文件名和属性清晰可见，使用 `lfs path2fid` 也能正常解析出该文件的全局 FID（`[0x200000410:0x12a:0x0]`）。然而一旦尝试 `cat` 或 `open()` 读取该文件，系统即报错退出。
+
+## 9.8.2 排查过程
+
+1. **服务端日志检查**：  
+   在对应的 MDT0000 上查看内核调试日志：
+   ```text
+   LustreError: testfs-MDT0000: cannot find object [0x200000410:0x12a:0x0] in OI table: rc = -2
+   ```
+   **排查发现**：元数据目录项中记录的 FID 是正确的，但当 MDT 尝试在本地底层磁盘的 OI 索引表中查找该 FID 对应的物理 Inode 时，OI 查找返回了 `-ENOENT`（未找到）。
+
+2. **根因机理分析**：  
+   在断电前夕，系统正在密集创建该批样本文件。MDT 上的内存事务分为两部分：上层目录树写入与底层 OI 索引树更新。由于断电发生在文件系统元数据刷盘的临界时间窗内，底层磁盘日志虽恢复了目录树项，但对应的 OI 索引项在物理块刷写中途损坏，导致该文件的 FID 与物理 Inode 映射关系断裂，形成了“目录可见但实体失联”的孤儿状态。
+
+## 9.8.3 修复措施与成效
+
+1. **运行在线/离线 OI 表修复工具（LFSCK）**：  
+   利用 Lustre 内置的文件系统检查与修复工具（LFSCK, Lustre File System Consistency Checker）针对 OI 表执行在线扫描与重建：
+   ```bash
+   lctl lfsck_start -M testfs-MDT0000 -t oi
+   ```
+2. **监控修复进度**：  
+   ```bash
+   lctl get_param mdd.testfs-MDT0000.oi_scrub
+   ```
+   LFSCK 扫描了底层的物理 Inode 表，成功找回丢失映射的物理 Inode，并重新在 `oi.16/*` 表中填补了对应的 FID 条目。修复完成后，用户程序读取恢复正常，无数据丢失。
+
+---
+

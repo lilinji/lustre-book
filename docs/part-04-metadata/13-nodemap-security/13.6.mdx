@@ -1,0 +1,49 @@
+---
+title: "13.6 生产事故案例：租户容器 Root 越权篡改核心共享库与 Nodemap 加固"
+description: "某云算力平台向外部科研团队开放了 128 台配有 GPU 的裸金属计算节点。"
+---
+
+# 13.6 生产事故案例：租户容器 Root 越权篡改核心共享库与 Nodemap 加固
+
+## 13.6.1 故障现象
+
+某云算力平台向外部科研团队开放了 128 台配有 GPU 的裸金属计算节点。租户在本地拥有操作系统 root 权限并以特权模式运行 Docker 容器。
+
+某日上午，平台安全巡检系统报警：集群公共软件目录 `/mnt/lustre/opt/compiler/` 下的核心库文件被非正常覆写，多个公用二进制文件的修改时间（mtime）与 Inode 属性被篡改，导致全集群其他租户的编译任务大面积失败报 `Segmentation fault`。
+
+## 13.6.2 排查过程
+
+1. **元数据 Changelog 审计锁定嫌疑操作**：  
+   在 MDS 上导出相关时段的变更日志：
+   ```bash
+   lfs changelog_find /mnt/lustre/opt/compiler/ -t SATTR,OPEN
+   ```
+   **数据分析**：捕获到一条关键修改记录：
+   ```text
+   rec: 8492011 type: SATTR fid: [0x200000401:0x12:0x0] uid: 0 gid: 0 nid: 10.10.10.142@o2ib
+   ```
+   修改请求直接来源于 NID 为 `10.10.10.142@o2ib` 的计算节点，且报文中的 UID 与 GID 均为 `0`。
+
+2. **根因机理深入剖析**：  
+   - 该节点分配给了外部租户开发团队。租户在容器内部以 `root`（UID=0）身份运行脚本，将编译临时文件误写到了平台共享基础库路径下；
+   - 经审查集群配置，平台此前仅配置了默认的全局挂载，**未开启 Nodemap 隔离（`nodemap.active=0`）**；
+   - 在缺乏 Nodemap 的裸运行模式下，MDS 盲目信任客户端传入的 `uid=0`，赋予了外部租户进程等同于集群超级管理员的完全控制权，产生了灾难性的越权覆写。
+
+## 13.6.3 修复措施与成效
+
+1. **紧急数据自愈**：  
+   利用 Lustre 快照与备份镜像即刻回滚并替换受损的编译器二进制文件；
+2. **全局启动 Nodemap 租户防御体系**：  
+   在全网服务端激活 Nodemap 并实施严格的白名单准入：
+   ```bash
+   # 全局开启 Nodemap 引擎
+   lctl nodemap_activate 1
+   
+   # 修改默认 default 规则：非受信且全量 Squash 为 65534
+   lctl nodemap_modify --name default --property admin --value 0
+   lctl nodemap_modify --name default --property trusted --value 0
+   ```
+   随后为所有外部租户划定专属 NID 范围，并强制绑定各自的 `fileset` 子目录与非 root 映射规则。加固后，外部租户即使在本地使用 root 发送指令，服务端接收后自动强转为 `nobody`，杜绝了一切跨租户和提权操作。
+
+---
+

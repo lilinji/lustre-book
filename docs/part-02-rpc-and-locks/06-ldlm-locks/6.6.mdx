@@ -1,0 +1,30 @@
+---
+title: "6.6 生产实战：LDLM 锁 参数调优与监控指标"
+description: "| 监控目的 | 执行命令 | 输出关注重点 | | :--- | :--- | :--- | | 监控客户端持锁数量 | lctl getparam ldlm.namespaces..lockcount | 监控本地当前持有的锁总数，评估锁内存占用。"
+---
+
+# 6.6 生产实战：LDLM 锁 参数调优与监控指标
+
+## 6.6.1 核心分布式锁参数配置
+
+```bash
+# 1. 调整客户端本地未被引用锁的 LRU 缓存上限
+options ldlm ldlm_lru_size=400
+
+# 2. 控制每个命名空间的最大并发锁数量 (服务端)
+options ldlm ldlm_namespaces_max=1000000
+
+# 3. 开启提交时共享锁 (Commit-on-Share, COS) 提高事务吞吐
+options ldlm ldlm_cos=1
+```
+
+## 6.6.2 常用状态监控与指标查看
+
+| 监控目的 | 执行命令 | 输出关注重点 |
+| :--- | :--- | :--- |
+| **监控客户端持锁数量** | `lctl get_param ldlm.namespaces.*.lock_count` | 监控本地当前持有的锁总数，评估锁内存占用。 |
+| **查看锁资源等待队列** | `lctl get_param ldlm.services.*.waiting_locks` | 监控服务端是否存在大量处于 Waiting 状态的锁冲突。 |
+| **查看 AST 异步回调统计** | `lctl get_param ldlm.namespaces.*.pool.stats` | 查看 blocking/completion/glimpse 各类 AST 的触发频次与耗时。 |
+
+---
+

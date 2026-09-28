@@ -1,0 +1,59 @@
+---
+title: "1.7 生产事故案例：NUMA CPT 映射退化引发集群 I/O 吞吐骤降"
+description: "某智算中心新建 64 台全闪存储节点（每台配置双路 AMD EPYC 7763 处理器，整机共 128 核心，配置 4 块 Mellanox 200Gb/s HDR InfiniBand 网络适配器与 16 块 NVMe 固态硬盘）。"
+---
+
+# 1.7 生产事故案例：NUMA CPT 映射退化引发集群 I/O 吞吐骤降
+
+## 1.7.1 故障现象
+
+某智算中心新建 64 台全闪存储节点（每台配置双路 AMD EPYC 7763 处理器，整机共 128 核心，配置 4 块 Mellanox 200Gb/s HDR InfiniBand 网络适配器与 16 块 NVMe 固态硬盘）。
+
+在对存储集群执行并发聚合顺序写入压力测试时，单台存储节点预期写入带宽应稳定在 24GB/s 左右，但实测仅达到 6.2GB/s，性能衰减约 74%。监控数据显示：
+- 节点 CPU 总利用率仅约 35%，未发生 CPU 耗尽。
+- 操作系统内核态自旋锁（`queued_spin_lock_slowpath`）以及 `memcpy` 耗时显著偏高。
+- 双路 CPU 之间的跨 Socket 总线（AMD Infinity Fabric）利用率持续达到 100% 饱和上限。
+
+## 1.7.2 排查过程
+
+1. **链路层排查**：  
+   使用 `lspci -vvv` 检查网卡与固态硬盘的 PCIe 协商状态，所有设备均处于 PCIe Gen4 x16 全速状态；使用 `ibstat` 检查 InfiniBand 端口协商速率与丢包计数，无链路丢包或重传。
+
+2. **拓扑分布检查**：  
+   检查内核 CPT 分布信息：
+   ```bash
+   lctl get_param cpu_partition_table
+   ```
+   输出结果如下：
+   ```text
+   cpu_partition_table=
+   0: 0-127
+   ```
+   **排查发现**：系统启动时未能正确提取 AMD 架构在开启 NPS4 时的 NUMA 拓扑，导致全机 128 个物理核心被统一编入了单个 CPT 0。
+
+3. **机理分析**：  
+   服务器上的 4 块 InfiniBand 网卡分别插在不同的 PCIe 插槽上，分别归属于不同的物理 NUMA 节点（网卡 0/1 属于 Socket 0，网卡 2/3 属于 Socket 1）。由于退化为单分区，LNet 接收队列、PtlRPC 线程池及数据缓冲区均在全局单一 CPT 中分配。运行在 Socket 1 上的核心频繁读写位于 Socket 0 对应内存通道中的网络缓冲区，导致跨 Socket 内存访问流量打满片间互联总线，内存访存延迟急剧增加，处理器执行流水线严重停滞。
+
+## 1.7.3 修复措施与验证结果
+
+在存储节点的 `/etc/modprobe.d/lustre.conf` 中显式指定 CPT 划分模式，与主板硬件 NUMA 拓扑对齐：
+
+```bash
+# 将 128 核心切分为 4 个独立的 CPT 分区，分别对应 4 个 NUMA 域
+options libcfs cpu_npartitions=4 cpu_pattern="0[0-31] 1[32-63] 2[64-95] 3[96-127]"
+```
+
+更新配置并重启 LNet 服务后，重新检查 CPT 表：
+```bash
+# lctl get_param cpu_partition_table
+cpu_partition_table=
+0: 0-31
+1: 32-63
+2: 64-95
+3: 96-127
+```
+
+网卡中断处理与对应 CPT 的 PtlRPC 线程池被限定在本地 NUMA 节点内执行。在相同压力测试场景下，跨 Socket 总线流量下降至基线水平，单节点聚合顺序写入吞吐恢复至 24.6GB/s。
+
+---
+

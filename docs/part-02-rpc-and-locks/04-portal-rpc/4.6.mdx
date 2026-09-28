@@ -1,0 +1,31 @@
+---
+title: "4.6 生产实战：Portal RPC 参数调优与故障排查"
+description: "| 监控目的 | 执行命令 | 关键指标解读 | | :--- | :--- | :--- | | 查看服务分区运行状态 | lctl getparam ost.OSS.ostio.threads | 监控 threadsstarted 与..."
+---
+
+# 4.6 生产实战：Portal RPC 参数调优与故障排查
+
+## 4.6.1 核心服务线程参数配置
+
+```bash
+# 配置各服务类型的线程数范围 (最小线程数:最大线程数)
+# OST I/O 线程池通常根据核心数与 NVMe/HDD 存储并发能力设定
+options ost oss_num_threads=128
+
+# MDT 元数据服务线程池
+options mds mds_num_threads=64
+
+# 客户端调整 ptlrpcd 伙伴线程组大小
+options ptlrpc ptlrpcd_partner_group_size=2
+```
+
+## 4.6.2 常用状态监控与指标查看
+
+| 监控目的 | 执行命令 | 关键指标解读 |
+| :--- | :--- | :--- |
+| **查看服务分区运行状态** | `lctl get_param ost.OSS.ost_io.threads_*` | 监控 `threads_started` 与 `threads_running`，判断服务线程是否打满。 |
+| **检查请求积压队列** | `lctl get_param ost.OSS.ost_io.req_waittime` | 查看请求在队列中的等待耗时，识别服务端处理瓶颈。 |
+| **监控 NRS 调度器状态** | `lctl get_param ost.OSS.ost_io.nrs_policies` | 查看当前激活的调度算法（fifo/crrn/tbf）及各队列在途深度。 |
+
+---
+

@@ -1,0 +1,43 @@
+---
+title: "26.4 现代可观测性体系构建：Prometheus 与 Grafana 全景集成"
+description: "现代企业级部署通过结合云原生可观测性工具链，实现高频低负载指标采集与全景呈现："
+---
+
+# 26.4 现代可观测性体系构建：Prometheus 与 Grafana 全景集成
+
+现代企业级部署通过结合云原生可观测性工具链，实现高频低负载指标采集与全景呈现：
+
+```mermaid
+flowchart LR
+    subgraph Storage_Nodes ["全集群存储节点 (MDS / OSS)"]
+        PROC["/sys/fs/lustre/*"] --> EXP["lustre_exporter (Go 二进制探针)<br/>端口: :9169"]
+    end
+
+    subgraph Monitor_Core ["监控中枢平台"]
+        EXP -->|HTTP GET /metrics (10s 抓取)| PROM["Prometheus 时序数据库"]
+        PROM --> ALERT["Alertmanager 告警管理"]
+    end
+
+    subgraph Visualization ["可视化与运维决策"]
+        PROM --> GRAF_TOTAL["Grafana: 集群聚合总吞吐 / IOPS 大盘"]
+        PROM --> GRAF_HEAT["Grafana: 各 OST 空间与吞吐热力分布图"]
+        PROM --> GRAF_TOP["Grafana: 全网 TOP 10 消耗作业排行榜"]
+    end
+```
+
+## 常用一键排障与 Top 作业聚合查询
+
+运维工程师可通过快速脚本，直接在 MDT 服务端实时提取引发吞吐倾斜的前列作业：
+
+```bash
+# 实时提取在 MDT0000 上消耗 open 次数最高的前 5 个作业
+lctl get_param mdt.testfs-MDT0000.job_stats | \
+awk '/job_id:/ {id=$2} /open:/ {print $2, id}' | sort -rn | head -n 5
+
+# 实时提取在 OST 存储目标上写入带宽最高的活跃作业
+lctl get_param obdfilter.*.job_stats | \
+awk '/job_id:/ {id=$2} /write_bytes:/ {bytes=$2; getline; print bytes, id}' | sort -rn | head -n 5
+```
+
+---
+

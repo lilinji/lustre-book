@@ -1,0 +1,40 @@
+---
+title: "21.3 用户态高性能 NFS 网关：NFS-Ganesha 与 FSAL_LUSTRE"
+description: "传统的 Linux 内核级 NFS 服务（nfsd）运行在内核态，当其后端对接 Lustre 时，数据流必须经历“VFS $\rightarrow$ nfsd $\rightarrow$ VFS $\rightarrow$ llite”的双..."
+---
+
+# 21.3 用户态高性能 NFS 网关：NFS-Ganesha 与 FSAL_LUSTRE
+
+传统的 Linux 内核级 NFS 服务（`nfsd`）运行在内核态，当其后端对接 Lustre 时，数据流必须经历“VFS $\rightarrow$ nfsd $\rightarrow$ VFS $\rightarrow$ llite”的双重上下文切换与重复页面锁定，性能衰减严重。
+
+**NFS-Ganesha** 是一款运行在用户空间的模块化高性能 NFS 服务器，支持通过专有文件系统抽象层（FSAL, FileSystem Abstraction Layer）直通底层存储：
+
+```mermaid
+flowchart TD
+    subgraph Traditional_Kernel_NFS ["传统内核级 NFS 路径 (双重 VFS 穿越)"]
+        NFS_CLI_1["NFS 客户端"] -->|NFSv4 RPC| K_NET_1["Linux 内核网络栈"]
+        K_NET_1 --> K_NFSD["内核 nfsd 线程池"]
+        K_NFSD --> K_VFS_1["Linux VFS 调度"]
+        K_VFS_1 --> LLITE_1["llite 客户端驱动"]
+        LLITE_1 --> LUSTRE_1["Lustre 存储集群"]
+    end
+
+    subgraph Ganesha_FSAL_Path ["NFS-Ganesha 直通路径 (用户态零冗余穿越)"]
+        NFS_CLI_2["NFS 客户端"] -->|NFSv4 RPC| GANESHA["NFS-Ganesha 守护进程 (用户态)"]
+        GANESHA --> FSAL["FSAL_LUSTRE 专有插件"]
+        FSAL ==>|调用 liblustreapi 直通 ioctl| LLITE_2["llite 内核接口 (绕过标准 VFS 查找)"]
+        LLITE_2 --> LUSTRE_2["Lustre 存储集群"]
+    end
+```
+
+## `FSAL_LUSTRE` 直通特性优势
+
+1. **FID 与 NFS 文件句柄直接对齐**：  
+   `FSAL_LUSTRE` 直接将 Lustre 的 128 位全局 FID 编码为 NFS 协议的不透明文件句柄（NFS File Handle）。当客户端发起按句柄检索时，Ganesha 绕过了昂贵的 VFS 路径逐级查找，直接通过 `llapi_fid2path` 与底层 Inode 握手；
+2. **多线程无锁高并发缓存**：  
+   Ganesha 内部构建了基于内存基数树的 Cache Inode 引擎，在大规模目录扫描（如包含 100 万文件的目录执行 `ls`）时，能够极大卸载 MDS 的网络 RPC 负载；
+3. **支持 NFSv4.1 pNFS（并行 NFS）**：  
+   支持将数据布局直接下发给支持 pNFS 的客户端，使外部 NFS 客户端能够绕过 Ganesha 网关，直接通过 RDMA 直通后端的各个 OST 节点并发读写。
+
+---
+

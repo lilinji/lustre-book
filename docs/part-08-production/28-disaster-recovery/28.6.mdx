@@ -1,0 +1,13 @@
+---
+title: "28.6 容灾排查与自愈 运维基线检查清单"
+description: "-   执行底层破坏性命令前强制扇区备份：对任何出现 Superblock 异常的底层存储卷执行 e2fsck 前，必须使用 dd if=/dev/mapper/... of=/tmp/sbbackup.img bs=1M count=100 备份关键扇区。"
+---
+
+# 28.6 容灾排查与自愈 运维基线检查清单
+
+- [ ] **执行底层破坏性命令前强制扇区备份**：对任何出现 Superblock 异常的底层存储卷执行 `e2fsck` 前，必须使用 `dd if=/dev/mapper/... of=/tmp/sb_backup.img bs=1M count=100` 备份关键扇区。
+- [ ] **定期执行低速 LFSCK 预防性体检**：建议在每季度低峰期启动受控速率的 `lctl lfsck_start -t layout -m 3000`，主动清理长期运行累积的隐匿孤儿对象与空间碎片。
+- [ ] **严禁在未确认隔离前跨机重复挂载**：高可用故障切换必须严格依赖 STONITH 物理断电，严禁在两台服务器上盲目尝试同时挂载同一底层共享存储卷。
+
+---
+

@@ -1,0 +1,27 @@
+---
+title: "第 4 章：Portal RPC 异步通信框架与请求状态机"
+description: "> 本章核心源码文件：   > - lustre/include/lustrenet."
+---
+
+# 第 4 章：Portal RPC 异步通信框架与请求状态机
+
+> **本章核心源码文件**：  
+> - `lustre/include/lustre_net.h`：Portal RPC 核心数据结构、状态机枚举与服务定义  
+> - `lustre/ptlrpc/ptlrpcd.c`：客户端异步请求派发守护线程与伙伴调度机制  
+> - `lustre/ptlrpc/service.c`：服务端多 CPT 亲和流水线与线程池实现  
+> - `lustre/ptlrpc/client.c`：客户端请求生命周期分配、排队与超时处理  
+> - `lustre/ptlrpc/nrs.c`：网络请求调度器（NRS, Network Request Scheduler）核心框架  
+
+---
+
+## 本章核心小节导读
+
+- [4.1 控制流与数据流分离设计](./4.1)
+- [4.2 客户端异步引擎：ptlrpcd 与伙伴线程防死锁](./4.2)
+- [4.3 客户端请求状态机：七阶段生命周期](./4.3)
+- [4.4 服务端多 CPT 亲和流水线与 NRS 调度器](./4.4)
+- [4.5 大块数据 RDMA 传输：Bulk Transfer 引擎](./4.5)
+- [4.6 生产实战：Portal RPC 参数调优与故障排查](./4.6)
+- [4.7 生产事故案例：MDT 线程池耗尽引发元数据 RPC 级联阻塞](./4.7)
+- [4.8 Portal RPC 运维基线检查清单](./4.8)
+- [本章小结：Portal RPC 核心思考与自检](./summary)

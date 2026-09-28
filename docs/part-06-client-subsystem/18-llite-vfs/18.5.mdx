@@ -1,0 +1,38 @@
+---
+title: "18.5 客户端完整读写 I/O 流水线"
+description: "用户态应用发起的 read(2) 与 write(2) 请求在客户端内核中跨越多个子系统完成对象寻址与网络并发。"
+---
+
+# 18.5 客户端完整读写 I/O 流水线
+
+用户态应用发起的 `read(2)` 与 `write(2)` 请求在客户端内核中跨越多个子系统完成对象寻址与网络并发。
+
+![客户端读写 I/O 完整执行流](/images/internals_fig05_client_io_flow.png)
+
+图 16-3 展示了请求在 `llite` 内核驱动内部的执行流转。结合分层组件交互视图（图 16-4），完整的读写操作流经历以下关键阶段：
+
+![客户端分层 I/O 调用与 OST/MDT 交互关系](/images/arch_10_client_io_flow.png)
+
+## 阶段一：VFS 分发与模式判定
+1. 应用程序发起 `write(fd, buf, count)`；
+2. VFS 将请求投递至 `file_operations` 对应的 `ll_file_write_iter()`（`lustre/llite/file.c`）；
+3. **Direct I/O vs Buffered I/O 分流**：
+   - 若设置了 `O_DIRECT` 标志，跳过客户端 Page Cache，请求被直接构造成向量页映射（`iov_iter`），交由 `ll_direct_IO()` 处理；
+   - 若为标准缓冲 I/O，请求进入通用页面缓存管理逻辑，通过 `address_space_operations` 的 `ll_write_begin()` 与 `ll_write_end()` 进行脏页分配。
+
+## 阶段二：CL Object 抽象与条带切分
+1. `llite` 获取或初始化当前操作对应的 `struct cl_io` 状态机；
+2. 请求进入 **LOV（Lustre Object Virtual）** 层。LOV 根据该文件关联的条带化布局（Stripe Count、Stripe Size、OST 索引池）：
+   - 计算逻辑偏移量属于哪个条带（Stripe Index = `(offset / stripe_size) % stripe_count`）；
+   - 计算该分段在对应 OST 对象上的目标偏移量（Target Offset = `(offset / (stripe_size * stripe_count)) * stripe_size + (offset % stripe_size)`）；
+3. 将一个文件级的连续逻辑请求拆分为 $N$ 个针对各个 OST 目标对象的独立子请求。
+
+## 阶段三：OSC 聚合与 LNet 传输
+1. 各分片请求被分发给下层的 **OSC（Object Storage Client）** 实例；
+2. OSC 检查客户端本地持有的 **Grant 配额** 与 **Extent Lock 锁范围**：
+   - 若无对应区间锁，向该 OST 发起 LDLM 申请；
+   - 若 Grant 足额，将页面加入 OSC 脏页队列（Dirty Queue）并根据 RPC 批量上限（默认单次 1MB 或 4MB）打包为 `brw_page` 结构数组；
+3. OSC 组装 Portal RPC 数据报文，通过 LNet（Lustre Network）跨 InfiniBand 或以太网直投目标 OSS 节点。
+
+---
+

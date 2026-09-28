@@ -1,0 +1,46 @@
+---
+title: "27.3 网络层调优：打破 LNet 吞吐瓶颈"
+description: "LNet 的端到端并发能力受控于信用流控机制： - credits：本地 HCA 网卡允许同时挂载在底层发送环形队列（TX Ring）的最大工作请求数； - peercredits：本地允许向单个远程 NID 并发提交的最大 RPC 数量。"
+---
+
+# 27.3 网络层调优：打破 LNet 吞吐瓶颈
+
+## 22.3.1 信用配额（Credits）与带宽时延积（BDP）数学模型
+
+LNet 的端到端并发能力受控于信用流控机制：
+- **`credits`**：本地 HCA 网卡允许同时挂载在底层发送环形队列（TX Ring）的最大工作请求数；
+- **`peer_credits`**：本地允许向单个远程 NID 并发提交的最大 RPC 数量。
+
+在高带宽时延积（BDP, Bandwidth-Delay Product）的现代高速网络中，管道理论容量为：
+
+$$\text{Capacity} = \text{Bandwidth} \times \text{RTT}$$
+
+以 200Gb/s（约 25GB/s）InfiniBand HDR 网络、单向往返时延约为 40 微秒的智算集群为例：
+$$\text{BDP} = 25\text{ GB/s} \times 0.00004\text{ s} = 1.0\text{ MB}$$
+
+若单个 Portal RPC 控制信令大小为 4KB，为了让物理网络管道时刻保持饱和传输，必须有至少 $1000\text{ KB} / 4\text{ KB} = 250$ 个在途工作请求。如果保持系统默认保守的 `peer_credits=8`，网络适配器发送队列将频繁处于饥饿等待状态，实测带宽将被腰斩。
+
+**生产级高性能网络推荐配置**（`/etc/modprobe.d/lnet.conf`）：
+```ini
+# 针对 100G/200G/400G InfiniBand / RoCE 网络放宽并发队列
+options ko2iblnd credits=256 peer_credits=64 peer_credits_hiw=32 concurrent_sends=64 map_on_demand=256 fmr_pool_size=2048
+```
+
+## 22.3.2 跨 NUMA 亲和性与中断绑定
+
+在多路多核 CPU 服务器中，如果处理网络中断的 CPU 核心与物理网卡所在的 PCIe 控制器跨越了不同的 NUMA 节点，跨 Socket 总线通信会产生额外的访存开销与缓存失效。
+
+```bash
+# 1. 查询物理网卡绑定的 NUMA 节点
+cat /sys/class/net/ib0/device/numa_node
+# 输出 0 说明网卡直连 Socket 0 的 PCIe 控制器
+
+# 2. 将网卡中断处理亲和性限制在对应 NUMA 核心范围内
+set_irq_affinity_bynode.sh 0 ib0
+
+# 3. 配置 LNet 接口的 CPT 绑定，确保 LNet 内核线程与网卡在同一个 NUMA 域调度
+lnetctl net add --net o2ib0 --if ib0 --cpt 0
+```
+
+---
+

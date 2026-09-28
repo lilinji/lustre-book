@@ -1,0 +1,26 @@
+---
+title: "第 16 章：分布式 I/O 流水线与缓存 Grant 机制"
+description: "> 本章核心源码文件：   > - lustre/osc/oscrequest."
+---
+
+# 第 16 章：分布式 I/O 流水线与缓存 Grant 机制
+
+> **本章核心源码文件**：  
+> - `lustre/osc/osc_request.c`：客户端对象存储客户端（OSC）Grant 申请、流控与脏页管理  
+> - `lustre/osc/osc_page.c`：客户端异步脏页生命周期与物理页面刷新  
+> - `lustre/ofd/ofd_io.c`：服务端 Grant 配额计算、贷出与动态收缩（Grant Shrink）实现  
+> - `lustre/include/lustre_osc.h`：Grant 控制块、阈值与水位线数据结构定义  
+> - `lustre/ptlrpc/pack_generic.c`：Bulk RDMA 报文解包与数据校验实现  
+
+---
+
+## 本章核心小节导读
+
+- [16.1 异步写入的空间超卖风险与 Grant 机制的产生](./16.1)
+- [16.2 Grant 信用分配与流控闭环](./16.2)
+- [16.3 动态回收机制：Grant Shrinking](./16.3)
+- [16.4 分布式 Bulk RDMA I/O 流水线状态机](./16.4)
+- [16.5 生产实战：I/O 流水线与 Grant 参数调优与监控指标](./16.5)
+- [16.6 生产事故案例：Grant 回收延迟导致全集群高并发写入陷入 D 状态停顿](./16.6)
+- [16.7 I/O 流水线与 Grant 运维基线检查清单](./16.7)
+- [本章小结：I/O 流水线与 Grant 核心思考与自检](./summary)

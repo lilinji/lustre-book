@@ -1,0 +1,29 @@
+---
+title: "14.4 物理 I/O 流水线：osd_iobuf 与 bio 直通"
+description: "在 osd-ldiskfs 实现中，为了避免数据在进入磁盘前被 Linux 系统 Page Cache 进行二次拷贝与锁争用，内核采用 Direct I/O 直通流水线。"
+---
+
+# 14.4 物理 I/O 流水线：osd_iobuf 与 bio 直通
+
+在 `osd-ldiskfs` 实现中，为了避免数据在进入磁盘前被 Linux 系统 Page Cache 进行二次拷贝与锁争用，内核采用 **Direct I/O 直通流水线**。
+
+```c
+struct osd_iobuf {
+    wait_queue_head_t   dr_wait;            /* I/O 完成等待队列 */
+    atomic_t            dr_numreqs;         /* 在途提交的 bio 结构体数量 */
+    int                 dr_error;           /* 块设备驱动返回的错误码 */
+    unsigned int        dr_max_pages;       /* 本次 I/O 涉及的最大物理页数 */
+    unsigned int        dr_npages;          /* 当前装配的实际物理页数 */
+    struct page       **dr_pages;           /* 指向待传输物理页面的指针数组 */
+};
+```
+
+## I/O 组装与提交流程
+
+1. **页面直接映射**：Bulk RDMA 数据到达后，物理页直接挂接在 `osd_iobuf` 的 `dr_pages` 数组中。
+2. **块映射查询（`bmap` / `fiemap`）**：调用底层文件系统 Extent 映射接口，将逻辑对象内部偏移量转换为裸设备上的物理扇区地址。
+3. **`bio` 组装与合并**：针对物理上连续的扇区，动态构建 Linux 原生 `struct bio` 结构体，将尽可能多的物理页面聚合进单个大型 I/O 请求（通常可达 1MB 或 4MB）。
+4. **异步并发发射**：调用 `submit_bio()` 将组装好的 `bio` 向量直接投递至硬件块设备请求队列，由块设备驱动与 NVMe 控制器执行物理刷写。
+
+---
+

@@ -1,0 +1,29 @@
+---
+title: "12.3 存储引擎：LLOG（Lustre Log）组织架构"
+description: "Changelog 并不保存在普通用户文件中，而是交由内核专用的追加型日志引擎 LLOG（Lustre Log） 管理。"
+---
+
+# 12.3 存储引擎：LLOG（Lustre Log）组织架构
+
+Changelog 并不保存在普通用户文件中，而是交由内核专用的追加型日志引擎 **LLOG（Lustre Log）** 管理。
+
+```mermaid
+flowchart TD
+    CAT["Catalog 主索引对象 (LLOG Catalog)<br/>记录所有活动日志文件的 FID 与有效范围"]
+    
+    subgraph LLOG_Files ["物理日志分片文件 (每个约 10MB)"]
+        F1["Log File 1<br/>Index: 1 ~ 50000<br/>(所有消费者均已消费，可回收)"]
+        F2["Log File 2<br/>Index: 50001 ~ 100000<br/>(保留中：消费者 B 游标在此)"]
+        F3["Log File 3<br/>Index: 100001 ~ 125000<br/>(当前活动写入分片)"]
+    end
+    
+    CAT --> F1
+    CAT --> F2
+    CAT --> F3
+```
+
+- **分片管理**：日志被切分为若干个定长的物理分片文件（通常为 10MB）。一个分片写满后，自动分配并链接下一个新分片，避免单文件无限膨胀。
+- **原子追加**：Changelog 的写入与引发该变更的元数据操作严格捆绑在底层同一个磁盘文件系统事务中（如 `ext4` 的 `journal_start/stop` 或 ZFS 的同一个 TXG），确保不会发生“元数据已生效但事件未记录”的不一致状态。
+
+---
+

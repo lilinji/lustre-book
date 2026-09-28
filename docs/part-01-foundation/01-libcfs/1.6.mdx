@@ -1,0 +1,19 @@
+---
+title: "1.6 生产实战：CPT 与 libcfs 参数调优矩阵"
+description: "下表给出了大规模存储节点部署中 libcfs 基础层的推荐配置："
+---
+
+# 1.6 生产实战：CPT 与 libcfs 参数调优矩阵
+
+下表给出了大规模存储节点部署中 `libcfs` 基础层的推荐配置：
+
+| 调节参数 / 接口 | 配置位置 | 典型推荐值 | 适用硬件与问题场景 | 性能影响与作用机理 |
+| :--- | :--- | :--- | :--- | :--- |
+| `cpu_npartitions` | `/etc/modprobe.d/lustre.conf` | `2`、`4` 或 `8` | 双路 / 四路多核心服务器，单机核心数 $\ge 64$ | 将大规格单机切分为多个并发 CPT，成倍削减全局自旋锁竞争，降低 CPU 锁争用时间。 |
+| `cpu_pattern` | `/etc/modprobe.d/lustre.conf` | 见拓扑实操 | 配合 NUMA 节点与高速网卡 PCIe Slot 布局 | 明确指定各 CPT 核心绑定范围，消除跨 Socket 内存访问开销。 |
+| `debug_mb` | `/proc/sys/lnet/debug_mb` | `64` ~ `128` | 生产环境 MDS / OSS 节点 | 设定 Tracefile 的 Per-CPU 环形缓冲总内存上限（单位 MB）。避免占用过多常驻内存，同时确保事故瞬间具备充足的日志上下文。 |
+| `debug` | `/proc/sys/lnet/debug` | `0x03f004` (排除 TRACE/INFO) | 生产环境高 IOPS 负载 | 过滤日志级别。严禁在生产开启 `D_TRACE` 或 `D_INFO`，仅保留 `D_ERROR \| D_NET \| D_HA \| D_CONFIG` 等关键状态。 |
+| `fail_loc` | `/proc/sys/lustre/fail_loc` | `0` | 线上生产环境必查项 | 必须置为 0，防止测试遗留的故障码触发异常逻辑。 |
+
+---
+

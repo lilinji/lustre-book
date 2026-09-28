@@ -1,0 +1,24 @@
+---
+title: "21.2 生产级高可用集群网关架构：CTDB 与 Clustered Samba"
+description: "结合官方架构图 21-1，生产级异构接入集群由多台对等的协议网关节点（Gateway Nodes）组成，底层直接挂载 Lustre 全局共享文件系统。"
+---
+
+# 21.2 生产级高可用集群网关架构：CTDB 与 Clustered Samba
+
+![CTDB 集群网关与高可用多协议接入架构](/images/arch_06_ctdb_cluster_gateway.png)
+
+结合官方架构图 21-1，生产级异构接入集群由多台对等的协议网关节点（Gateway Nodes）组成，底层直接挂载 Lustre 全局共享文件系统。其核心技术由以下三大支柱支撑：
+
+## 21.2.1 集群 TDB 数据库（CTDB）
+CTDB（Clustered TDB）是 Samba 专用的分布式轻量级数据库：
+- **分布式共享状态维护**：将所有已打开文件的句柄（File Handles）、租约状态（Leases）以及客户端连接会话同步至所有网关节点的内存中；
+- **全对称 Active-Active 负载均衡**：多个网关节点对外呈现完全一致的目录视图，客户端可以通过 DNS 轮询或负载均衡设备连接至任意一台网关，彼此之间状态实时强一致。
+
+## 21.2.2 浮动 VIP 与 Tickle ACK 毫秒级故障转移
+CTDB 统一接管网关集群的公网 IP 资源池（Public IP Pool）：
+- 每个网关节点正常承载若干个浮动虚拟 IP（Floating VIP）；
+- **节点宕机快速接管**：当 Gateway 1 突发断电时，CTDB 集群心跳在 2 秒内感知失联，集群仲裁立即将 Gateway 1 的 VIP 漂移至健康的 Gateway 2；
+- **TCP Tickle ACK 机制**：由于 TCP 协议在对端静默死亡时默认会等待数十分钟才会超时断开，Gateway 2 在接管 VIP 后，**主动向此前与 Gateway 1 建立连接的客户端伪造发送一个乱序的 TCP ACK 报文（Tickle ACK）**。客户端收到该非法报文后立即触发 TCP RST，强行重置并即刻发起重连。Windows/macOS 客户端在无须用户人工干预的情况下，数秒内透明恢复映射盘读写。
+
+---
+

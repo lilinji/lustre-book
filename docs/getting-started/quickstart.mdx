@@ -1,0 +1,278 @@
+---
+title: "Lustre 极简容器化上手实战"
+description: "基于 Docker 容器在 5 分钟内快速构建单机 Lustre 极简集群，体验 MGS/MDS/OSS 核心架构与条带化 Striping I/O。"
+---
+
+本教程面向初次接触 Lustre 的系统工程师与存储开发者。你将在 5 分钟内，利用 Docker 容器在本地快速构建一个具备 **MGS（管理服务）**、**MDS/MDT（元数据服务）**、**OSS/OST（对象数据存储）** 与 **Client 客户端** 的完整 Lustre 并行文件系统实验环境，并亲自验证核心的**文件条带化（Striping）**机制。
+
+---
+
+## 实验前置要求
+
+在开始之前，请确保宿主机满足以下基础环境：
+
+- **操作系统**：Linux 宿主机环境（Ubuntu 22.04 LTS、Rocky Linux 9、CentOS 8/9 或配备 Linux 内核的开发机）
+- **容器运行时**：已安装并运行 Docker 20.10+ 或 Podman
+- **权限**：具备 `sudo` 权限（Lustre 依赖内核虚拟设备与 loop 块设备，容器需使用 `--privileged` 运行）
+
+<Note>
+**为什么容器需要特权模式？**  
+Lustre 的高性能根基源于其 Linux 内核模块（`libcfs`、`lnet`、`obdclass`、`lustre`）。在容器内挂载原生 Lustre 文件系统时，容器需要访问宿主机 `/dev/loop*` 设备并向内核注册 VFS 挂载点。
+</Note>
+
+---
+
+## 上手实战步骤
+
+<Steps>
+
+<Step title="拉取实验镜像并创建独立网络">
+
+为隔离 Lustre 通信协议栈，首先在 Docker 中创建专属的虚拟桥接网络：
+
+```bash
+docker network create --subnet=172.28.0.0/16 lustre-net
+```
+
+拉取内置编译好 Lustre 2.16 内核工具包的一体化沙箱镜像：
+
+```bash
+docker pull ghcr.io/lustre/lustre-sandbox:2.16.0 || docker pull almalinux:9
+```
+
+<Tip>
+若网络无法直接拉取官方镜像，可使用本地编译镜像，或基于支持 Lustre 客户端驱动的标准化容器底座运行。
+</Tip>
+
+</Step>
+
+<Step title="启动特权沙箱容器">
+
+运行容器并挂载系统设备总线，映射专用的 LNet 端口（默认 Portal RPC 监听 `988` 端口）：
+
+```bash
+docker run -d --name lustre-quickstart \
+  --privileged \
+  --net lustre-net \
+  --ip 172.28.0.10 \
+  -v /dev:/dev \
+  -v /lib/modules:/lib/modules:ro \
+  ghcr.io/lustre/lustre-sandbox:2.16.0 \
+  sleep infinity
+```
+
+进入容器交互终端：
+
+```bash
+docker exec -it lustre-quickstart bash
+```
+
+</Step>
+
+<Step title="模拟物理块设备 (Loop Devices)">
+
+Lustre 采用**元数据与数据物理解耦**架构，至少需要分配 1 个元数据目标卷（MDT）和 2 个对象存储目标卷（OST）：
+
+```bash
+# 创建虚拟磁盘镜像文件
+mkdir -p /srv/lustre-disks
+dd if=/dev/zero of=/srv/lustre-disks/mdt.img bs=1M count=1024
+dd if=/dev/zero of=/srv/lustre-disks/ost0.img bs=1M count=2048
+dd if=/dev/zero of=/srv/lustre-disks/ost1.img bs=1M count=2048
+
+# 关联为内核 Loop 块设备
+losetup /dev/loop10 /srv/lustre-disks/mdt.img
+losetup /dev/loop11 /srv/lustre-disks/ost0.img
+losetup /dev/loop12 /srv/lustre-disks/ost1.img
+```
+
+</Step>
+
+<Step title="格式化 MGS/MDT 与 OST 目标卷">
+
+调用 `mkfs.lustre` 格式化工具初始化集群拓扑布局：
+
+<CodeGroup>
+```bash 1. 格式化 MGS + MDT 组合卷
+# 命名文件系统为 lustrefs，将 MGS（管理）与 MDT0 放置在同一目标上
+mkfs.lustre --fsname=lustrefs \
+            --mgs --mdt \
+            --index=0 \
+            /dev/loop10
+```
+
+```bash 2. 格式化对象存储卷 OST0
+# 指定所属集群为 lustrefs，指向 MGS 节点的 NID (172.28.0.10@tcp)
+mkfs.lustre --fsname=lustrefs \
+            --ost \
+            --mgsnode=172.28.0.10@tcp \
+            --index=0 \
+            /dev/loop11
+```
+
+```bash 3. 格式化对象存储卷 OST1
+mkfs.lustre --fsname=lustrefs \
+            --ost \
+            --mgsnode=172.28.0.10@tcp \
+            --index=1 \
+            /dev/loop12
+```
+</CodeGroup>
+
+<Check>
+格式化完成后，每个目标设备都会在底层文件系统（ldiskfs/zfs）根目录下写入统一的 `LAST_ID`、`CONFIGS/` 与 `O/` 目录结构。
+</Check>
+
+</Step>
+
+<Step title="按拓扑次序挂载服务端">
+
+依照集群服务依赖，先挂载管理中心，再挂载元数据，最后挂载数据存储目标：
+
+```bash
+# 创建服务端挂载目录
+mkdir -p /mnt/mdt /mnt/ost0 /mnt/ost1
+
+# 1. 挂载 MGS/MDT
+mount -t lustre /dev/loop10 /mnt/mdt
+
+# 2. 挂载 OST0 与 OST1
+mount -t lustre /dev/loop11 /mnt/ost0
+mount -t lustre /dev/loop12 /mnt/ost1
+```
+
+执行 `lctl dl` 查看已加载的底层内核 OBD 设备列表：
+
+```bash
+lctl dl
+```
+
+输出呈现代表内核对象栈装配成功：
+```text
+  0 UP mgc MGC172.28.0.10@tcp 4b953d61-8272-911b-74b7-d4fae3b3187b 5
+  1 UP mdt MDS MDS_uuid 3
+  2 UP mds lustrefs-MDT0000 lustrefs-MDT0000_uuid 3
+  3 UP mdd lustrefs-MDD0000 lustrefs-MDD0000_uuid 3
+  4 UP ost OSS OSS_uuid 3
+  5 UP obdfilter lustrefs-OST0000 lustrefs-OST0000_uuid 3
+  6 UP obdfilter lustrefs-OST0001 lustrefs-OST0001_uuid 3
+```
+
+</Step>
+
+<Step title="客户端透明挂载 (VFS llite)">
+
+在同一节点上拉起客户端挂载点：
+
+```bash
+mkdir -p /mnt/lustre
+mount -t lustre 172.28.0.10@tcp:/lustrefs /mnt/lustre
+```
+
+验证客户端识别到的全局聚合容量与 OST 列表：
+
+```bash
+lfs df -h
+```
+
+预期终端输出：
+```text
+UUID                       bytes        Used   Available Use% Mounted on
+lustrefs-MDT0000_uuid       1.0G        4.2M      940.0M   1% /mnt/lustre[MDT:0]
+lustrefs-OST0000_uuid       2.0G       20.0M        1.8G   1% /mnt/lustre[OST:0]
+lustrefs-OST0001_uuid       2.0G       20.0M        1.8G   1% /mnt/lustre[OST:1]
+
+filesystem_summary:         4.0G       40.0M        3.6G   1% /mnt/lustre
+```
+
+</Step>
+
+<Step title="体验核心机制：文件条带化 (Striping)">
+
+Lustre 突破单机性能上限的杀手锏在于 **Striping（条带化并发切片）**。我们将演示如何定制条带策略并验证物理落盘分布。
+
+#### 1. 创建双轨条带目录
+设置新目录下所有文件在 2 个 OST 上以 1MB 粒度轮询切片：
+
+```bash
+mkdir -p /mnt/lustre/striped_demo
+lfs setstripe -c 2 -S 1M /mnt/lustre/striped_demo
+```
+
+#### 2. 并发写入测试大文件
+向条带化目录写入一个 16MB 的测试数据流：
+
+```bash
+dd if=/dev/urandom of=/mnt/lustre/striped_demo/benchmark.bin bs=1M count=16
+```
+
+#### 3. 提取条带布局元数据 (LOV EA)
+通过 `lfs getstripe` 探查该文件真实的切片拓扑：
+
+```bash
+lfs getstripe /mnt/lustre/striped_demo/benchmark.bin
+```
+
+终端将清晰列出切片的对象 ID（`lmm_oi`）与目标 OST 映射：
+```text
+/mnt/lustre/striped_demo/benchmark.bin
+lmm_stripe_count:  2
+lmm_stripe_size:   1048576
+lmm_layout_gen:    0
+lmm_stripe_offset: 0
+	obdidx		 objid		 objid		 group
+	     0	            33	          0x21	     0
+	     1	            33	          0x21	     0
+```
+
+<Check>
+可以看到，`benchmark.bin` 被精准切分为 1MB 大小的 Chunk，交替并发写入到了 `OST 0` 和 `OST 1` 上！当万卡 GPU 并发写入时，聚合吞吐将随 OST 数量呈近线性扩展。
+</Check>
+
+</Step>
+
+</Steps>
+
+---
+
+## 常用健康检查与诊断指令
+
+在完成基础实战后，可通过以下官方命令进一步探索系统内部状态：
+
+<CodeGroup>
+```bash LNet 节点联通测试
+# 探测指定 NID 的网络心跳与延迟
+lctl ping 172.28.0.10@tcp
+```
+
+```bash 查看脏页与缓存流控
+# 查看客户端当前累积的脏页配额 (Grant)
+lctl get_param osc.*.cur_dirty_bytes
+```
+
+```bash 查看条带与 RPC 统计
+# 查看特定 OST 的活动 RPC 队列与吞吐统计
+lctl get_param osc.*.stats
+```
+</CodeGroup>
+
+---
+
+## 下一步学习路径
+
+通过本篇实操，你已经直观掌握了 Lustre 的组件三元分离架构与条带化逻辑。接下来，建议按照全书的技术演进路线深入理解其内核实现：
+
+<CardGroup cols={2}>
+  <Card title="第 1 章：libcfs 跨平台内核抽象" icon="code" href="/part-01-foundation/01-libcfs/README">
+    深入 Linux 内核基础设施：内存池、哈希表、CPU 分区调度与自旋锁抽象。
+  </Card>
+  <Card title="第 2 章：LNet 通信引擎全景" icon="network-wired" href="/part-01-foundation/02-lnet/README">
+    解密微秒级 HPC 通信骨干：Portal 机制、Multi-Rail 绑定与 RDMA 零拷贝。
+  </Card>
+  <Card title="第 14 章：OST 与 OSD 存储核心" icon="hard-drive" href="/part-05-data-storage/14-ost-osd/README">
+    探寻底盘数据如何持久化：事务原子性、直接 I/O 与 ZFS/ldiskfs 双引擎抉择。
+  </Card>
+  <Card title="第 15 章：现代布局演进 (PFL / FLR / DoM)" icon="layer-group" href="/part-05-data-storage/15-striping-pfl-flr/README">
+    从固定条带走向渐进式布局：深入 PFL 自动扩容、FLR 镜像冗余与元数据内联。
+  </Card>
+</CardGroup>

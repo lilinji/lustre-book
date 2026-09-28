@@ -1,0 +1,25 @@
+---
+title: "18.1 llite 架构定位：Linux VFS 与分布式集群的适配中枢"
+description: "在 Linux 操作系统中，虚拟文件系统（VFS, Virtual File System）为用户空间进程屏蔽了底层存储介质的差异，提供通用的系统调用入口（如 open(2)、read(2)、write(2)、stat(2)）。"
+---
+
+# 18.1 llite 架构定位：Linux VFS 与分布式集群的适配中枢
+
+在 Linux 操作系统中，虚拟文件系统（VFS, Virtual File System）为用户空间进程屏蔽了底层存储介质的差异，提供通用的系统调用入口（如 `open(2)`、`read(2)`、`write(2)`、`stat(2)`）。
+
+对于本地文件系统（如 Ext4、XFS），VFS 下方直接对接单机通用块层与物理磁盘；而对于分布式文件系统 Lustre，内核客户端必须通过专门的驱动桥梁——**`llite`（Lustre Lite）**，将单机 POSIX 文件系统调用平滑转换为跨网络的分布式元数据（MDT）与数据对象（OST）交互。
+
+![Lustre 客户端全栈软件分层架构](/images/internals_fig04_software_stack.png)
+
+如图 16-1 所示，`llite` 处于客户端协议栈的核心枢纽位置：
+1. **向上对接 Linux VFS**：向内核注册 `struct file_system_type lustre_fs_type`，实例化 `super_operations`、`inode_operations`、`file_operations`、`dentry_operations` 与 `address_space_operations` 五大核心操作跳转表。
+2. **向下驱动 Lustre 子系统**：
+   - **元数据分支**：通过 `llite` 的 Inode 属性与目录操作，驱动 `lmv`（元数据虚拟卷）与 `mdc`（元数据客户端），经由 LNet 与 MDS 节点建立 RPC 会话；
+   - **数据对象分支**：通过 `cl_object` 与 `cl_io` 状态机，驱动 `lov`（对象虚拟卷）与 `osc`（对象存储客户端），完成文件逻辑偏移量到 OST 对象偏移量的条带切分与并发 I/O 投递。
+
+![Lustre 客户端在 Linux 内核 VFS 与块层中的架构对接](/images/arch_09_client_vfs_stack.png)
+
+在图 16-2 展示的内核分层视图中，Lustre 客户端绕过了传统的单机 Linux Page Cache 和块设备 I/O 调度器（Block I/O Scheduler）。`llite` 将内核请求截获后，交由 Lustre 专属的客户端缓存子系统（CL Cache / OSC RPC Batcher）与分布锁管理器（LDLM）进行协调，从而在普通 PC 服务器上聚合出数百 GB/s 的并行 I/O 能力。
+
+---
+

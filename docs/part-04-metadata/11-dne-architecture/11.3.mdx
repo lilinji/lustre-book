@@ -1,0 +1,33 @@
+---
+title: "11.3 跨 MDT 分布式操作与更新日志（Update Log）"
+description: "在多元数据环境下，某些 POSIX 操作涉及跨不同 MDT 的状态协同（例如：将文件从 MDT0001 的目录移动到 MDT0002 的目录下，即跨节点 rename）。"
+---
+
+# 11.3 跨 MDT 分布式操作与更新日志（Update Log）
+
+在多元数据环境下，某些 POSIX 操作涉及跨不同 MDT 的状态协同（例如：将文件从 MDT0001 的目录移动到 MDT0002 的目录下，即跨节点 `rename`）。这类操作若发生中途断电或网络超时，极易产生单边孤儿文件或目录树撕裂。
+
+Lustre 实现了基于 **更新日志（Update Log / OUT 机制）** 的分布式两阶段提交协议：
+
+```mermaid
+sequenceDiagram
+    participant C as 客户端 (Client)
+    participant M1 as 协调方 MDT 0001 (源目录所在节点)
+    participant M2 as 参与方 MDT 0002 (目标目录所在节点)
+
+    C->>M1: 发起跨节点重命名 RPC (rename /dir1/A -> /dir2/B)
+    Note over M1: M1 充当分布式事务协调者 (Coordinator)<br/>1. 开启本地事务，在 Update Log 中记录待执行操作
+    M1->>M2: 2. 发送分布式子更新 RPC (OUT_UPDATE)<br/>要求 M2 在目标目录创建目标项 B 并链接到文件 FID
+    Note over M2: M2 校验权限，在本地执行写入并返回确认
+    M2-->>M1: 3. 返回执行就绪应答
+    Note over M1: 4. M1 在本地目录树中删除源项 A，持久化事务提交
+    M1-->>C: 5. 向客户端返回成功应答
+    Note over M1: 后台异步清理 Update Log，事务彻底闭合
+```
+
+- **协调者机制**：接收请求的 MDT 充当事务协调者（Coordinator），在本地持久化记录分布式操作的预备日志（Update Log）。
+- **幂等子事务**：协调者通过专用的内部 RPC 向远程参与方下发子更新命令。
+- **故障重放恢复**：若协调者或参与方在执行过程中发生崩溃，重启后的恢复流程会扫描未提交的 Update Log，向参与方重新推进或回滚操作，保证跨 MDT 操作的原子性。
+
+---
+

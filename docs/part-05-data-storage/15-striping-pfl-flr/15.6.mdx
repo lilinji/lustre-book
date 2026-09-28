@@ -1,0 +1,26 @@
+---
+title: "15.6 生产实战：现代布局配置与运维命令集"
+description: "15.6 生产实战：现代布局配置与运维命令集 - Lustre 并行分布式文件系统内核实现与架构设计。"
+---
+
+# 15.6 生产实战：现代布局配置与运维命令集
+
+```bash
+# 1. 创建标准的工业级 PFL 布局 (0~1MB 单条带, 1M~64MB 4条带, 64M~1TB 16条带, 1T以上满条带)
+lfs setstripe -E 1M -c 1 -E 64M -c 4 -E 1T -c 16 -E -1 -c -1 /mnt/lustre/pfl_template/
+
+# 2. 创建具备 Data-on-MDT (DoM) 属性的阶梯布局 (前 1MB 数据内嵌在 MDT, 之后条带化到 OST)
+lfs setstripe -E 1M -L mdt -E -1 -c 8 /mnt/lustre/dom_dir/
+
+# 3. 创建具备双副本的 FLR 镜像文件
+lfs mirror create -N2 /mnt/lustre/critical_checkpoint.bin
+
+# 4. 手动触发陈旧镜像的后台在线再同步
+lfs mirror resync /mnt/lustre/critical_checkpoint.bin
+
+# 5. 校验指定文件各组件详细布局与镜像状态
+lfs getstripe -v /mnt/lustre/critical_checkpoint.bin
+```
+
+---
+

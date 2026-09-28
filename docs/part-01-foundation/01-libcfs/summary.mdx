@@ -1,0 +1,8 @@
+---
+title: "本章小结：libcfs 核心思考与自检"
+description: "libcfs 作为 Lustre 存储栈的底层支撑库，通过 CPT 机制将多核与 NUMA 物理资源细化为独立的虚拟处理单元，消除了全局大锁竞争与跨片访存瓶颈；通过 Per-CPU 环形缓冲实现了低开销的 Tracefile 调试日志系统；..."
+---
+
+# 本章小结：libcfs 核心思考与自检
+
+`libcfs` 作为 Lustre 存储栈的底层支撑库，通过 CPT 机制将多核与 NUMA 物理资源细化为独立的虚拟处理单元，消除了全局大锁竞争与跨片访存瓶颈；通过 Per-CPU 环形缓冲实现了低开销的 Tracefile 调试日志系统；通过 `fail_loc` 提供了精准可控的内核异常注入途径；并通过兼容层抽象屏蔽了不同 Linux 内核版本的 API 变动。这些底层机制为上层的 LNet 网络通信与 Portal RPC 框架提供了稳定的并发与调度底座。

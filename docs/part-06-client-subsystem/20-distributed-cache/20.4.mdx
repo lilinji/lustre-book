@@ -1,0 +1,37 @@
+---
+title: "20.4 生产实战：分布式缓存一致性 参数调优与监控指标"
+description: "| 监控项目 | 查询命令 | 核心指标与诊断意义 | | :--- | :--- | :--- | | 分布式 mmap 性能与缺页频率 | lctl getparam llite..mmapstats | fault（读缺页次数）、pa..."
+---
+
+# 20.4 生产实战：分布式缓存一致性 参数调优与监控指标
+
+## 18.4.1 PCC 环境部署与维护命令
+
+```bash
+# 1. 在客户端添加本地 NVMe 目录为 PCC-RW 缓存后端 (绑定项目配额与匹配规则)
+lctl pcc add /mnt/lustre /mnt/nvme_local --param "rwid=1" --param "projid=1001"
+
+# 2. 为静态只读数据集注册 PCC-RO 缓存后端
+lctl pcc add /mnt/lustre /mnt/nvme_ro --param "roid=2"
+
+# 3. 手动将大模型权重预热加载到本地 PCC 缓存中
+lfs pcc attach -i 2 /mnt/lustre/models/llama3-70b/weights.bin
+
+# 4. 查看文件当前的 PCC 缓存状态与挂载拓扑
+lfs pcc state /mnt/lustre/models/llama3-70b/weights.bin
+
+# 5. 从 PCC 缓存中安全卸载并同步数据回远端 OST
+lfs pcc detach /mnt/lustre/models/llama3-70b/weights.bin
+```
+
+## 18.4.2 核心监控指标与状态查询
+
+| 监控项目 | 查询命令 | 核心指标与诊断意义 |
+| :--- | :--- | :--- |
+| **分布式 mmap 性能与缺页频率** | `lctl get_param llite.*.mmap_stats` | `fault`（读缺页次数）、`page_mkwrite`（写缺页次数）。若 `mkwrite` 频率异常高，说明存在多线程写争用。 |
+| **PCC 缓存命中与分流统计** | `lctl get_param pcc.*.stats` | `read_bytes`（本地 NVMe 承载的读吞吐）、`write_bytes`（本地写吞吐），评估旁路网络卸载率。 |
+| **客户端脏页积压与水位** | `lctl get_param osc.*.cur_dirty_bytes` | 评估客户端积压的脏页是否逼近 `max_dirty_mb` 上限。 |
+| **内存 Shrinker 页面回收计数** | `lctl get_param llite.*.dump_page_cache` | 监控客户端被 Linux 内核收缩器强制回收的页面总数，评估系统物理内存压力。 |
+
+---
+

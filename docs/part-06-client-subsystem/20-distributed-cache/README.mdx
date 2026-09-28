@@ -1,0 +1,25 @@
+---
+title: "第 20 章：分布式缓存一致性与并发控制 (PCC / 分布式 mmap)"
+description: "> 本章核心源码文件：   > - lustre/llite/llitemmap."
+---
+
+# 第 20 章：分布式缓存一致性与并发控制 (PCC / 分布式 mmap)
+
+> **本章核心源码文件**：  
+> - `lustre/llite/llite_mmap.c`：分布式内存映射（mmap）、缺页异常处理（`ll_fault()` / `ll_page_mkwrite()`）与范围锁绑定实现  
+> - `lustre/pcc/pcc_client.c`：持久化客户端缓存（PCC, Persistent Client Cache）本地调度与 I/O 重定向引擎  
+> - `lustre/include/lustre_pcc.h`：PCC 数据结构、布局锁交互状态及模式标记（PCC-RO / PCC-RW）定义  
+> - `lustre/llite/lcommon_cl.c`：客户端内核内存收缩器（Shrinker）与冷数据淘汰策略实现  
+> - `lustre/utils/lfs_pcc.c`：用户态 `lfs pcc` 缓存规则绑定、挂载（Attach）与卸载（Detach）管理  
+
+---
+
+## 本章核心小节导读
+
+- [20.1 分布式内存映射一致性：分布式 mmap 的核心挑战](./20.1)
+- [20.2 持久化客户端缓存：PCC（Persistent Client Cache）](./20.2)
+- [20.3 客户端内存收缩器（Memory Shrinker）与页面淘汰](./20.3)
+- [20.4 生产实战：分布式缓存一致性 参数调优与监控指标](./20.4)
+- [20.5 生产故障案例：分布式并发 mmap 跨节点“伪共享”引发锁颠簸风暴](./20.5)
+- [20.6 分布式缓存一致性 运维基线检查清单](./20.6)
+- [本章小结：分布式缓存一致性 核心思考与自检](./summary)

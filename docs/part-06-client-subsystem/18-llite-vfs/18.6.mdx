@@ -1,0 +1,124 @@
+---
+title: "18.6 用户态 C 语言控制接口：liblustreapi（LLAPI）"
+description: "除标准 POSIX 系统调用外，HPC、AI 训练平台及大数据应用通常需要直接感知和控制文件的底层条带分布、缓存策略与预取行为。Lustre 提供了专用的用户态 C 语言链接库 liblustreapi（头文件 <lustre/lustreapi."
+---
+
+# 18.6 用户态 C 语言控制接口：liblustreapi（LLAPI）
+
+除标准 POSIX 系统调用外，HPC、AI 训练平台及大数据应用通常需要直接感知和控制文件的底层条带分布、缓存策略与预取行为。Lustre 提供了专用的用户态 C 语言链接库 **`liblustreapi`**（头文件 `<lustre/lustreapi.h>`）。
+
+## 16.6.1 条带创建与动态布局定义：`llapi_file_create()` 与 `llapi_layout_*`
+
+在高性能并行计算（如 MPI-IO）场景下，如果依赖系统默认条带策略，大文件可能仅被写入单台 OST 导致吞吐瓶颈。通过 LLAPI，程序可在创建文件时显式指定条带拓扑：
+
+```c
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <string.h>
+#include <errno.h>
+#include <lustre/lustreapi.h>
+
+/**
+ * 示例 1：使用标准 llapi_file_create() 创建指定条带的文件
+ */
+int create_striped_file_simple(const char *path)
+{
+    unsigned long long stripe_size = 2 * 1024 * 1024; /* 2MB 条带单位 */
+    int stripe_offset = -1;                          /* -1 表示由 MDS 负载均衡选择起始 OST */
+    int stripe_count = 8;                            /* 跨越 8 台 OST 并行条带化 */
+    int stripe_pattern = LOV_PATTERN_RAID0;          /* RAID0 模式 */
+    int rc;
+
+    /* llapi_file_create 内部执行 open(O_CREAT | O_LOV_DELAY_CREATE) 并通过 ioctl 注入布局 */
+    rc = llapi_file_create(path, stripe_size, stripe_offset, stripe_count, stripe_pattern);
+    if (rc &lt; 0) {
+        fprintf(stderr, "Failed to create striped file %s: %s\n", path, strerror(-rc));
+        return rc;
+    }
+    printf("Successfully created striped file: %s (stripes=%d, size=2MB)\n", path, stripe_count);
+    return 0;
+}
+
+/**
+ * 示例 2：使用更灵活的 llapi_layout API 构建复杂复合布局
+ */
+int create_file_with_layout_api(const char *path)
+{
+    struct llapi_layout *layout;
+    int fd, rc;
+
+    /* 1. 分配空的布局对象 */
+    layout = llapi_layout_alloc();
+    if (!layout) {
+        perror("llapi_layout_alloc failed");
+        return -ENOMEM;
+    }
+
+    /* 2. 配置条带参数 */
+    llapi_layout_stripe_count_set(layout, 16);
+    llapi_layout_stripe_size_set(layout, 4 * 1024 * 1024); /* 4MB */
+    llapi_layout_pool_name_set(layout, "flash_pool");      /* 指定写入全闪存储池 */
+
+    /* 3. 使用该布局原子创建并打开文件 */
+    fd = llapi_layout_file_create(path, O_CREAT | O_WRONLY | O_TRUNC, 0644, layout);
+    if (fd &lt; 0) {
+        fprintf(stderr, "llapi_layout_file_create failed: %s\n", strerror(errno));
+        llapi_layout_free(layout);
+        return -errno;
+    }
+
+    printf("File %s created using custom layout in 'flash_pool'. FD: %d\n", path, fd);
+
+    /* 4. 释放布局对象引用并关闭文件 */
+    llapi_layout_free(layout);
+    close(fd);
+    return 0;
+}
+```
+
+## 16.6.2 客户端 I/O 智能提示与锁预取：`llapi_ladvise()`
+
+在大规模深度学习大模型训练的 Checkpoint 读取与加载场景中，客户端可通过 `llapi_ladvise()` 向内核发出 Advice 提示，指示底层提前预取或锁定数据区间，大幅降低多节点同时打开同一个巨型模型权重时的元数据风暴与网络抖动：
+
+```c
+#include <stdio.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <lustre/lustreapi.h>
+
+/**
+ * 示例 3：利用 LU_LADVISE_LOCKAHEAD 提前向服务端请求范围锁
+ */
+int prelock_file_range(int fd, uint64_t start_offset, uint64_t length)
+{
+    struct llapi_lu_ladvise advice;
+    int rc;
+
+    advice.lla_advice = LU_LADVISE_LOCKAHEAD;
+    advice.lla_value1 = LCK_CR; /* 预先获取只读共享锁 (Concurrent Read) */
+    advice.lla_value2 = 0;
+    advice.lla_start  = start_offset;
+    advice.lla_end    = start_offset + length;
+
+    /* 通过专用系统调用接口投递 Lustre Advice 指令 */
+    rc = llapi_ladvise(fd, LU_LADVISE_FLAG_SYNC, 1, &advice);
+    if (rc &lt; 0) {
+        fprintf(stderr, "llapi_ladvise failed: %s\n", strerror(-rc));
+        return rc;
+    }
+
+    printf("Range [0x%llx, 0x%llx] prelocked successfully.\n", 
+           (unsigned long long)start_offset, (unsigned long long)(start_offset + length));
+    return 0;
+}
+```
+
+- **`LU_LADVISE_WILLNEED`**：通知底层 OSC 提前从远端 OST 预读目标数据页到本地缓存；
+- **`LU_LADVISE_DONTNEED`**：通知底层 OSC 立即释放该范围的客户端缓存脏页，避免挤占宝贵的内核物理内存；
+- **`LU_LADVISE_LOCKAHEAD`**：提前完成 LDLM Extent 锁的申请与入队，使后续高并发的并行读取完全处于“锁已就绪”状态。
+
+---
+

@@ -1,0 +1,41 @@
+---
+title: "28.2 底层物理修复：e2fsck 与超级块抢救"
+description: "针对基于 ldiskfs 的存储目标，当底层物理介质由于异常掉电发生元数据损坏时，Linux 内核出于防御机制会自动将文件系统重挂为只读模式（Read-Only）。"
+---
+
+# 28.2 底层物理修复：e2fsck 与超级块抢救
+
+针对基于 `ldiskfs` 的存储目标，当底层物理介质由于异常掉电发生元数据损坏时，Linux 内核出于防御机制会自动将文件系统重挂为只读模式（Read-Only）。
+
+## 23.2.1 离线底层文件系统标准修复
+
+```bash
+# 1. 在集群管理器中禁用该存储资源，防止 Pacemaker 自动尝试重启
+pcs resource disable lustre_ost0002
+
+# 2. 卸载该目标挂载点
+umount /mnt/ost0002
+
+# 3. 强制执行文件系统一致性扫描并自动修复简单块位图与孤儿 Inode
+e2fsck -f -p -C 0 /dev/mapper/mpathb
+```
+
+## 23.2.2 主超级块损坏抢救：备用超级块（Backup Superblock）计算
+
+若主超级块（Block 0）遭遇坏块损坏，系统会抛出 `wrong fs type, bad superblock` 致命报错，导致常规 `mount` 失败。此时必须借助备用超级块实施救援：
+
+```bash
+# 1. 模拟格式化输出，获取系统预留备用超级块的精确物理偏移
+mke2fs -n /dev/mapper/mpathb
+```
+输出将明确标识备用超级块分布（通常为 32768, 98304, 163840, 229376 等块号）：
+
+```bash
+# 2. 指定备用超级块执行底层强制重构
+e2fsck -b 32768 -y /dev/mapper/mpathb
+```
+
+修复成功后，系统能够正确读取超级块，存储目标即可顺利重新挂载接入集群。
+
+---
+

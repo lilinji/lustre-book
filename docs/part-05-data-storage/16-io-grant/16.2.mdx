@@ -1,0 +1,40 @@
+---
+title: "16.2 Grant 信用分配与流控闭环"
+description: "Grant 是一种分布式的字节级存储信用额度（Byte-Level Storage Credit） 体系："
+---
+
+# 16.2 Grant 信用分配与流控闭环
+
+Grant 是一种分布式的**字节级存储信用额度（Byte-Level Storage Credit）** 体系：
+
+```mermaid
+sequenceDiagram
+    participant C as 客户端 (Client OSC)
+    participant S as 服务端 (OST / OFD)
+    participant D as 底层物理磁盘
+
+    Note over S: 服务端根据磁盘物理剩余空间<br/>计算并贷出可用信用: Grant = 100MB
+    S-->>C: 1. 在 RPC 应答中随路下发 Grant 额度 (100MB)
+    
+    Note over C: 应用程序发起 32MB write()<br/>校验发现本地 Grant (100MB) >= 32MB<br/>在本地扣减 Grant: 剩余 68MB<br/>数据安全写入本地 Page Cache，异步返回成功
+    
+    Note over C: 触发后台刷盘条件 (达到阈值或执行 fsync)
+    C->>S: 2. 发起 OST_WRITE RPC (携带 32MB 脏数据与消费证明)
+    Note over S: 3. 协调 Bulk RDMA 传输，将数据写入底层磁盘介质
+    S->>D: 物理写入完成，持久化锁定 32MB 空间
+    
+    S-->>C: 4. 返回应答：确认 32MB 落盘，并根据当前剩余空间重新授信 Grant
+    Note over C: 维持信用闭环，持续推进后续写入
+```
+
+## 15.2.1 客户端脏页约束条件
+
+在 `lustre/osc/osc_page.c` 中，客户端执行异步写入前必须满足下述核心安全不等式：
+
+$$\text{LocalDirtyBytes} + \text{NewWriteBytes} \le \text{CurrentGrantBytes}$$
+
+1. **信用充足**：若当前客户端拥有的空闲 Grant 额度大于等于待写入字节数，数据被允许安全进入本地 Page Cache，同时本地可用 Grant 相应扣减。
+2. **信用耗尽阻断**：若可用 Grant 不足，客户端内核暂停接受异步写入，强制将调用挂起并触发紧急刷盘（Flush），将本地已有的脏数据通过网络推送到 OST。直到 OST 完成物理落盘并随回包返回新的 Grant 授信后，客户端才允许继续接收新的写请求。
+
+---
+

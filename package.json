@@ -1,0 +1,15 @@
+{
+  "name": "lustre-book",
+  "version": "2.16.0",
+  "description": "《大话 Lustre：超大规模并行文件系统内核实现与架构设计》技术专著与文档工程",
+  "author": "Ringi",
+  "license": "CC-BY-NC-ND-4.0",
+  "scripts": {
+    "dev": "mintlify dev --dir docs",
+    "validate": "mintlify validate --dir docs",
+    "broken-links": "mintlify broken-links --dir docs"
+  },
+  "devDependencies": {
+    "mintlify": "latest"
+  }
+}

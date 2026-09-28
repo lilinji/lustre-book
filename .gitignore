@@ -1,21 +1,15 @@
-# mdBook build output
-dist/
-# mdPress build output
-_book/
-*.html
-# Source PDFs and local extracted materials
-book/
-_monolithic_backup/
-*.bak
-
-
 # Dependencies
 node_modules/
 
-# Build artifacts & PDF exports
-.tmp_*
+# Mintlify local preview cache
+.mintlify/
+
+# Build artifacts
+dist/
+_book/
 *.tmp
-*-latest.pdf
+.tmp_*
+*.bak
 
 # System & Editor files
 .DS_Store
@@ -24,7 +18,3 @@ Thumbs.db
 .idea/
 __pycache__/
 *.pyc
-
-# Local-only governance & agent docs: kept on disk, not published to the repo
-docs/
-CLAUDE.md

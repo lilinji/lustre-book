@@ -1,0 +1,27 @@
+---
+title: "第 5 章：分布式容错恢复与自适应超时 (Adaptive Timeouts)"
+description: "> 本章核心源码文件：   > - lustre/include/lustreimport."
+---
+
+# 第 5 章：分布式容错恢复与自适应超时 (Adaptive Timeouts)
+
+> **本章核心源码文件**：  
+> - `lustre/include/lustre_import.h`：客户端 Import 结构与自适应超时数据定义  
+> - `lustre/include/lustre_export.h`：服务端 Export 结构与客户端会话管理定义  
+> - `lustre/ptlrpc/service.c`：自适应超时计算与 Early Reply 提前应答实现  
+> - `lustre/ptlrpc/recover.c`：连接断开探测、重连调度与两阶段重放流水线  
+> - `lustre/ptlrpc/import.c`：Import 状态机流转与会话恢复管理  
+
+---
+
+## 本章核心小节导读
+
+- [5.1 静态超时的制约与自适应超时（Adaptive Timeouts）](./5.1)
+- [5.2 延时补偿机制：Early Reply（提前应答）](./5.2)
+- [5.3 分布式故障恢复与 Import 状态机](./5.3)
+- [5.4 两阶段重放机制（Two-Phase Replay）](./5.4)
+- [5.5 基于版本的恢复与命令式恢复](./5.5)
+- [5.6 生产实战：Recovery & AT 参数调优与故障排查](./5.6)
+- [5.7 生产事故案例：底层磁盘 I/O 停顿引发客户端级联超时与驱逐雪崩](./5.7)
+- [5.8 Recovery & AT 运维基线检查清单](./5.8)
+- [本章小结：Recovery & AT 核心思考与自检](./summary)

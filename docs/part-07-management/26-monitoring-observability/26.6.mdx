@@ -1,0 +1,14 @@
+---
+title: "26.6 监控与度量体系 运维基线检查清单"
+description: "-   全集群统一开启 Jobstats 体系：在文件系统初始化时通过 lctl confparam 固化 jobidvar（如 SLURMJOBID 或 procnameuid），为生产故障保留全链路业务溯源依据。 -   严密监控 re..."
+---
+
+# 26.6 监控与度量体系 运维基线检查清单
+
+- [ ] **全集群统一开启 Jobstats 体系**：在文件系统初始化时通过 `lctl conf_param` 固化 `jobid_var`（如 `SLURM_JOB_ID` 或 `procname_uid`），为生产故障保留全链路业务溯源依据。
+- [ ] **严密监控 `req_waittime` 与 `reqbuf_avail`**：将服务队列等待延迟与空闲请求缓冲区纳入 P0 级监控告警项，及时预警服务端线程池耗尽。
+- [ ] **定期清理直方图指标**：在进行 IOR、mdtest 等关键性能基准测试前，使用 `lctl set_param *.stats=clear` 清空历史计数器，确保测试样本具有绝对独立性。
+- [ ] **监控 `brw_stats` 块大小分布**：定期评估主要 OST 上的 I/O 规整度，若小块（&lt;16KB）占比长期超过 30%，需推动业务层引入缓存或批量写入优化。
+
+---
+

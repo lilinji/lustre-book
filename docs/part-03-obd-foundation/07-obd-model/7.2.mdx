@@ -1,0 +1,79 @@
+---
+title: "7.2 核心数据结构：struct obd_device 与 struct obd_ops"
+description: "每个具体的存储驱动实例在内核中均由 struct obddevice（lustre/include/obd."
+---
+
+# 7.2 核心数据结构：struct obd_device 与 struct obd_ops
+
+每个具体的存储驱动实例在内核中均由 `struct obd_device`（`lustre/include/obd.h`）表示：
+
+```c
+struct obd_device {
+    struct obd_type        *obd_type;           /* 指向设备类型描述符 (如 "osc", "mdt") */
+    char                    obd_name[MAX_OBD_NAME]; /* 设备全局唯一实例名 (如 "testfs-OST0000") */
+    struct obd_uuid         obd_uuid;           /* 设备的 UUID 标识 */
+    int                     obd_minor;          /* 在全局设备数组中的索引槽位编号 */
+    
+    /* 标志位 */
+    unsigned long           obd_attached:1,     /* 设备已分配并挂接 */
+                            obd_set_up:1,       /* 设备 setup() 函数执行成功 */
+                            obd_stopping:1,     /* 正在执行停止流程 */
+                            obd_force:1,        /* 强制卸载标志位 */
+                            obd_fail:1;         /* 设备发生故障异常 */
+
+    struct obd_ops         *obd_ops;            /* 设备操作函数跳转表 */
+    struct md_ops          *md_ops;             /* 元数据专用操作跳转表 */
+    
+    struct ldlm_namespace  *obd_namespace;      /* 该设备拥有的 LDLM 分布式锁命名空间 */
+    struct rhashtable       obd_uuid_hash;      /* 客户端 Export 会话 UUID 哈希表 */
+    struct rhltable         obd_nid_hash;       /* 客户端 Export 会话 NID 哈希表 */
+    atomic_t                obd_refcount;       /* 设备全局引用计数 */
+    wait_queue_head_t       obd_boot_waitq;     /* 初始化等待队列 */
+};
+```
+
+## 统一设备操作表：`struct obd_ops`
+
+上层通用代码通过 `struct obd_ops` 约定的函数指针访问底层硬件或逻辑层，隔离各模块实现细节：
+
+```c
+struct obd_ops {
+    struct module *owner;
+    int (*setup)(struct obd_device *dev, struct lustre_cfg *cfg);
+    int (*cleanup)(struct obd_device *dev);
+    int (*connect)(const struct lu_env *env, struct obd_export **exp,
+                   struct obd_device *dev, struct obd_uuid *cluuid,
+                   struct obd_connect_data *data, void *localdata);
+    int (*disconnect)(struct obd_export *exp);
+    int (*statfs)(const struct lu_env *env, struct obd_export *exp,
+                  struct obd_statfs *osfs, time64_t max_age, __u32 flags);
+    int (*iocontrol)(unsigned int cmd, struct obd_export *exp, int len,
+                     void *karg, void __user *uarg);
+    /* 核心数据读写方法 */
+    int (*preprw)(const struct lu_env *env, int cmd, struct obd_export *exp,
+                  struct obdo *oa, int objcount, struct obd_ioobj *obj,
+                  struct niobuf_remote *remote, int *pages,
+                  struct niobuf_local *local);
+    int (*commitrw)(const struct lu_env *env, int cmd, struct obd_export *exp,
+                    struct obdo *oa, int objcount, struct obd_ioobj *obj,
+                    struct niobuf_remote *remote, int pages,
+                    struct niobuf_local *local, int rc);
+};
+```
+
+### OBP 调用宏机制
+在内核源码中，上层模块严禁直接以 `dev->obd_ops->op(...)` 形式裸调操作表指针。Lustre 统一通过 `OBP(dev, op)` 保护宏展开调用：
+
+```c
+#define OBP(dev, op)                                    \
+    ({                                                  \
+        LASSERT(dev != NULL);                           \
+        LASSERT(dev->obd_ops != NULL);                  \
+        LASSERT(dev->obd_ops->op != NULL);              \
+        dev->obd_ops->op;                               \
+    })
+```
+该宏在编译期与调试运行时注入严格的前置条件断言（`LASSERT`），在指针为空或未初始化时立刻拦截崩溃，杜绝空指针引发内核 OOPS。
+
+---
+

@@ -1,0 +1,33 @@
+---
+title: "6.4 意向锁（Intent Lock）：1-RTT 复合元数据操作"
+description: "在传统 POSIX 文件系统中，打开或创建一个文件涉及多个步骤的交互： 1. 路径解析与元数据查找（lookup）并获取目录锁； 2. 权限校验与属主检查（permission）； 3. 文件创建或打开操作（create / open）；..."
+---
+
+# 6.4 意向锁（Intent Lock）：1-RTT 复合元数据操作
+
+在传统 POSIX 文件系统中，打开或创建一个文件涉及多个步骤的交互：
+1. 路径解析与元数据查找（`lookup`）并获取目录锁；
+2. 权限校验与属主检查（`permission`）；
+3. 文件创建或打开操作（`create` / `open`）；
+4. 获取针对该文件的操作锁。
+
+若上述每一步骤均对应一次独立的 RPC 往返，单次文件访问需经历 4 至 5 个 RTT 网络延迟。
+
+Lustre 首创了 **意向锁（Intent Lock）** 机制：
+
+```mermaid
+sequenceDiagram
+    participant C as 客户端
+    participant S as 服务端 (MDS)
+
+    Note over C: 用户执行 open("/data/test.dat", O_CREAT|O_RDWR)
+    C->>S: 发送复合意向锁 RPC (携带 IT_OPEN | IT_CREAT, 文件名, 期望模式)
+    Note over S: 服务端原子执行复合逻辑：<br/>1. 目录项路径查找 (lookup)<br/>2. 权限鉴权 (permission)<br/>3. 分配 Inode 与初始条带布局 (create)<br/>4. 将对应 IBITS 锁直接授予客户端
+    S-->>C: 单次应答返回 (包含文件 Inode, 初始属性, 条带布局, 已授予的 LDLM 锁)
+    Note over C: 客户端仅耗费 1 个 RTT 完成全部流程，立即可执行后续读写
+```
+
+客户端在申请锁的同时，通过在 `ldlm_enqueue` 请求中嵌入意向数据块（Intent Data，如 `IT_OPEN`、`IT_CREAT`、`IT_GETATTR`），通告服务端自身后续的操作目的。服务端在锁仲裁路径中一次性完成文件创建、权限校验、句柄打开并返回所需的数据属性，**将元数据操作的网络往返时延压缩至 1 个 RTT**。
+
+---
+

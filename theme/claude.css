@@ -6,7 +6,7 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=JetBrains+Mono:wght@400;500&display=swap');
 
 :root {
-  /* ===== Claude Signature Palette ===== */
+  /* ===== Claude Signature Palette (Light Mode) ===== */
   --claude-terracotta:       #D97757;
   --claude-terracotta-hover: #BF5B3B;
   --claude-terracotta-soft:  rgba(217, 119, 87, 0.10);
@@ -57,73 +57,86 @@
 }
 
 /* ==========================================================================
-   Dark Mode Overrides (Warm Charcoal instead of Cold Blue/Black)
+   Claude Editorial Dark Mode (Warm Charcoal & Terracotta)
+   Supports mdPress html.dark, [data-theme="dark"], and media query
    ========================================================================== */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --claude-cream:            #1F1E1D;
-    --claude-cream-card:       #262523;
-    --claude-sand-border:      #383531;
-    --claude-charcoal-body:    #E6E4DF;
-    --claude-charcoal-heading: #FAF8F5;
-    --claude-charcoal-muted:   #9C988F;
-    --claude-code-bg:          #282623;
-    --claude-code-border:      #3E3A34;
-    --claude-code-text:        #E6E4DF;
+html.dark,
+:root.dark,
+[data-theme="dark"],
+body.dark-mode {
+  --claude-cream:            #181716 !important;
+  --claude-cream-card:       #22211F !important;
+  --claude-sand-border:      #34322E !important;
+  --claude-charcoal-body:    #E2DFD8 !important;
+  --claude-charcoal-heading: #F7F5F0 !important;
+  --claude-charcoal-muted:   #9E9A92 !important;
+  --claude-code-bg:          #201F1D !important;
+  --claude-code-border:      #34322E !important;
+  --claude-code-text:        #EDEAE4 !important;
 
-    --color-bg:                #1F1E1D;
-    --color-bg-alt:            #262523;
-    --color-bg-sidebar:        #191817;
-    --color-text:              #E6E4DF;
-    --color-text-muted:        #9C988F;
-    --color-heading:           #FAF8F5;
-    --color-link:              #E08567;
-    --color-link-hover:        #F09E84;
-    --color-border:            #383531;
-    --color-accent:            #D97757;
-    --color-accent-light:      rgba(217, 119, 87, 0.18);
-
-    --color-code-bg:           #282623;
-    --color-code-border:       #3E3A34;
-    --color-code-text:         #E6E4DF;
-
-    --color-sidebar-hover:     rgba(217, 119, 87, 0.08);
-    --color-sidebar-active:    #E08567;
-    --color-sidebar-active-bg: rgba(217, 119, 87, 0.20);
-
-    --color-table-header:      #2A2825;
-    --color-table-stripe:      #1F1E1D;
-    --color-table-stripe-alt:  #252422;
-    --color-table-hover:       rgba(217, 119, 87, 0.12);
-  }
-}
-
-[data-theme="dark"], body.dark-mode {
-  --claude-cream:            #1F1E1D !important;
-  --claude-cream-card:       #262523 !important;
-  --claude-sand-border:      #383531 !important;
-  --claude-charcoal-body:    #E6E4DF !important;
-  --claude-charcoal-heading: #FAF8F5 !important;
-  --claude-charcoal-muted:   #9C988F !important;
-  --claude-code-bg:          #282623 !important;
-  --claude-code-border:      #3E3A34 !important;
-  --claude-code-text:        #E6E4DF !important;
-
-  --color-bg:                #1F1E1D !important;
-  --color-bg-alt:            #262523 !important;
-  --color-bg-sidebar:        #191817 !important;
-  --color-text:              #E6E4DF !important;
-  --color-text-muted:        #9C988F !important;
-  --color-heading:           #FAF8F5 !important;
+  --color-bg:                #181716 !important;
+  --color-bg-alt:            #22211F !important;
+  --color-bg-sidebar:        #141312 !important;
+  --color-text:              #E2DFD8 !important;
+  --color-text-muted:        #9E9A92 !important;
+  --color-heading:           #F7F5F0 !important;
   --color-link:              #E08567 !important;
   --color-link-hover:        #F09E84 !important;
-  --color-border:            #383531 !important;
+  --color-border:            #34322E !important;
   --color-accent:            #D97757 !important;
   --color-accent-light:      rgba(217, 119, 87, 0.18) !important;
 
-  --color-code-bg:           #282623 !important;
-  --color-code-border:       #3E3A34 !important;
-  --color-code-text:         #E6E4DF !important;
+  --color-code-bg:           #201F1D !important;
+  --color-code-border:       #34322E !important;
+  --color-code-text:         #EDEAE4 !important;
+
+  --color-sidebar-hover:     rgba(255, 255, 255, 0.05) !important;
+  --color-sidebar-active:    #E08567 !important;
+  --color-sidebar-active-bg: rgba(217, 119, 87, 0.20) !important;
+
+  --color-table-header:      #242320 !important;
+  --color-table-stripe:      #181716 !important;
+  --color-table-stripe-alt:  #1F1E1C !important;
+  --color-table-hover:       rgba(217, 119, 87, 0.12) !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not(.light) {
+    --claude-cream:            #181716;
+    --claude-cream-card:       #22211F;
+    --claude-sand-border:      #34322E;
+    --claude-charcoal-body:    #E2DFD8;
+    --claude-charcoal-heading: #F7F5F0;
+    --claude-charcoal-muted:   #9E9A92;
+    --claude-code-bg:          #201F1D;
+    --claude-code-border:      #34322E;
+    --claude-code-text:        #EDEAE4;
+
+    --color-bg:                #181716;
+    --color-bg-alt:            #22211F;
+    --color-bg-sidebar:        #141312;
+    --color-text:              #E2DFD8;
+    --color-text-muted:        #9E9A92;
+    --color-heading:           #F7F5F0;
+    --color-link:              #E08567;
+    --color-link-hover:        #F09E84;
+    --color-border:            #34322E;
+    --color-accent:            #D97757;
+    --color-accent-light:      rgba(217, 119, 87, 0.18);
+
+    --color-code-bg:           #201F1D;
+    --color-code-border:       #34322E;
+    --color-code-text:         #EDEAE4;
+
+    --color-sidebar-hover:     rgba(255, 255, 255, 0.05);
+    --color-sidebar-active:    #E08567;
+    --color-sidebar-active-bg: rgba(217, 119, 87, 0.20);
+
+    --color-table-header:      #242320;
+    --color-table-stripe:      #181716;
+    --color-table-stripe-alt:  #1F1E1C;
+    --color-table-hover:       rgba(217, 119, 87, 0.12);
+  }
 }
 
 /* ==========================================================================
@@ -138,6 +151,11 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+html.dark body {
+  background-color: #181716 !important;
+  color: #E2DFD8 !important;
+}
+
 /* Editorial Serif Headings */
 h1, h2, h3, h4, h5, h6,
 .chapter-title,
@@ -147,6 +165,12 @@ h1, h2, h3, h4, h5, h6,
   letter-spacing: -0.02em;
   font-weight: 500;
   line-height: 1.32;
+}
+
+html.dark h1, html.dark h2, html.dark h3, html.dark h4,
+html.dark .chapter-title,
+html.dark .content h1, html.dark .content h2, html.dark .content h3 {
+  color: #F7F5F0 !important;
 }
 
 .content h1, .chapter-title {
@@ -191,6 +215,10 @@ h1, h2, h3, h4, h5, h6,
   color: var(--color-text);
 }
 
+html.dark .content p {
+  color: #E2DFD8 !important;
+}
+
 /* ==========================================================================
    Links & Interactive Elements
    ========================================================================== */
@@ -215,9 +243,18 @@ a:hover {
   box-shadow: none;
 }
 
+html.dark .sidebar {
+  background-color: #141312 !important;
+  border-right-color: #34322E !important;
+}
+
 .sidebar-header {
   border-bottom: 1px solid var(--color-border) !important;
   padding: 22px 22px 18px !important;
+}
+
+html.dark .sidebar-header {
+  border-bottom-color: #34322E !important;
 }
 
 .sidebar-header h1 {
@@ -228,6 +265,22 @@ a:hover {
   letter-spacing: -0.01em;
 }
 
+html.dark .sidebar-header h1 {
+  color: #F7F5F0 !important;
+}
+
+.sidebar-header p,
+.sidebar-header .author,
+.sidebar-header .description {
+  color: var(--color-text-muted) !important;
+}
+
+html.dark .sidebar-header p,
+html.dark .sidebar-header .author,
+html.dark .sidebar-header .description {
+  color: #9E9A92 !important;
+}
+
 .sidebar-search .search-input {
   background: var(--color-bg) !important;
   border: 1px solid var(--color-border) !important;
@@ -236,6 +289,12 @@ a:hover {
   padding: 8px 14px !important;
   font-size: 0.86rem !important;
   transition: all 0.2s ease;
+}
+
+html.dark .sidebar-search .search-input {
+  background: #201F1D !important;
+  border-color: #383531 !important;
+  color: #E2DFD8 !important;
 }
 
 .sidebar-search .search-input:focus {
@@ -256,6 +315,10 @@ a:hover {
   padding: 16px 14px 6px !important;
   letter-spacing: -0.01em;
   text-transform: none;
+}
+
+html.dark .nav-section {
+  color: #F7F5F0 !important;
 }
 
 /* Navigation Row */
@@ -285,8 +348,16 @@ a:hover {
   text-decoration: none !important;
 }
 
+html.dark .nav-chapter {
+  color: #DDD9D0 !important;
+}
+
 .nav-row:hover {
   background-color: var(--color-sidebar-hover);
+}
+
+html.dark .nav-row:hover {
+  background-color: rgba(255, 255, 255, 0.05) !important;
 }
 
 /* Expanded Chapter Row: rounded pill/container matching Claude style */
@@ -294,19 +365,17 @@ a:hover {
   background-color: rgba(0, 0, 0, 0.045);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .nav-group.expanded > .nav-row {
-    background-color: rgba(255, 255, 255, 0.06);
-  }
-}
-[data-theme="dark"] .nav-group.expanded > .nav-row,
-body.dark-mode .nav-group.expanded > .nav-row {
-  background-color: rgba(255, 255, 255, 0.06);
+html.dark .nav-group.expanded > .nav-row {
+  background-color: rgba(255, 255, 255, 0.07) !important;
 }
 
 .nav-group.expanded > .nav-row > .nav-chapter {
   font-weight: 600 !important;
   color: var(--color-heading) !important;
+}
+
+html.dark .nav-group.expanded > .nav-row > .nav-chapter {
+  color: #F7F5F0 !important;
 }
 
 /* Toggle Button & Chevron Arrow */
@@ -329,12 +398,21 @@ body.dark-mode .nav-group.expanded > .nav-row {
   transition: all 0.2s ease;
 }
 
+html.dark .nav-toggle {
+  color: #9E9A92 !important;
+}
+
 .nav-toggle:hover {
   background: rgba(0, 0, 0, 0.06) !important;
   color: var(--color-heading) !important;
 }
 
-/* Sleek minimalist chevron matching screenshot */
+html.dark .nav-toggle:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: #F7F5F0 !important;
+}
+
+/* Sleek minimalist chevron */
 .nav-toggle::before {
   content: "" !important;
   display: inline-block !important;
@@ -374,6 +452,10 @@ body.dark-mode .nav-group.expanded > .nav-row {
   padding-bottom: 6px !important;
 }
 
+html.dark .nav-children-inner {
+  border-left-color: #34322E !important;
+}
+
 /* Sub-items (headings and child chapters) */
 .nav-children-inner .nav-item {
   color: var(--color-text-muted) !important;
@@ -389,9 +471,18 @@ body.dark-mode .nav-group.expanded > .nav-row {
   transition: all 0.16s ease !important;
 }
 
+html.dark .nav-children-inner .nav-item {
+  color: #9E9A92 !important;
+}
+
 .nav-children-inner .nav-item:hover {
   background: var(--color-sidebar-hover) !important;
   color: var(--color-heading) !important;
+}
+
+html.dark .nav-children-inner .nav-item:hover {
+  background: rgba(255, 255, 255, 0.05) !important;
+  color: #F7F5F0 !important;
 }
 
 .nav-children-inner .nav-item.active {
@@ -401,11 +492,16 @@ body.dark-mode .nav-group.expanded > .nav-row {
   position: relative !important;
 }
 
+html.dark .nav-children-inner .nav-item.active {
+  color: #E08567 !important;
+  background: rgba(217, 119, 87, 0.18) !important;
+}
+
 .nav-children-inner .nav-item.active::before {
   display: none !important;
 }
 
-/* Reset headings indentation since .nav-children-inner provides the guide line */
+/* Reset headings indentation */
 .nav-heading,
 .nav-heading-depth-1,
 .nav-heading-depth-2,
@@ -419,27 +515,38 @@ body.dark-mode .nav-group.expanded > .nav-row {
    Page Header & Sticky Breadcrumb
    ========================================================================== */
 .page-header {
-  background: rgba(250, 249, 245, 0.88) !important;
+  background: rgba(250, 249, 245, 0.92) !important;
   backdrop-filter: blur(12px) !important;
   -webkit-backdrop-filter: blur(12px) !important;
   border-bottom: 1px solid var(--color-border) !important;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .page-header {
-    background: rgba(31, 30, 29, 0.88) !important;
-  }
-}
-[data-theme="dark"] .page-header, body.dark-mode .page-header {
-  background: rgba(31, 30, 29, 0.88) !important;
+html.dark .page-header {
+  background: rgba(24, 23, 22, 0.94) !important;
+  border-bottom-color: #34322E !important;
 }
 
 .page-breadcrumb a {
   color: var(--color-text-muted) !important;
 }
 
-.page-breadcrumb a:hover {
+html.dark .page-breadcrumb,
+html.dark .page-breadcrumb a {
+  color: #9E9A92 !important;
+}
+
+.page-breadcrumb a:hover,
+html.dark .page-breadcrumb a:hover {
   color: var(--claude-terracotta) !important;
+}
+
+html.dark .theme-toggle button {
+  color: #9E9A92 !important;
+}
+
+html.dark .theme-toggle button:hover {
+  color: #F7F5F0 !important;
+  background: rgba(255, 255, 255, 0.08) !important;
 }
 
 /* ==========================================================================
@@ -449,6 +556,10 @@ body.dark-mode .nav-group.expanded > .nav-row {
   border-left: 1px solid var(--color-border) !important;
 }
 
+html.dark .page-toc {
+  border-left-color: #34322E !important;
+}
+
 .page-toc-header {
   font-family: var(--font-sans);
   color: var(--claude-charcoal-muted) !important;
@@ -456,19 +567,86 @@ body.dark-mode .nav-group.expanded > .nav-row {
   font-size: 0.72rem !important;
 }
 
+html.dark .page-toc-header {
+  color: #8C8880 !important;
+}
+
 .page-toc-nav a {
   color: var(--color-text-muted) !important;
   border-left-width: 2px !important;
 }
 
-.page-toc-nav a:hover {
+html.dark .page-toc-nav a {
+  color: #9E9A92 !important;
+}
+
+.page-toc-nav a:hover,
+html.dark .page-toc-nav a:hover {
   color: var(--color-heading) !important;
 }
 
-.page-toc-nav a.toc-active {
+.page-toc-nav a.toc-active,
+html.dark .page-toc-nav a.toc-active {
   color: var(--claude-terracotta) !important;
   border-left-color: var(--claude-terracotta) !important;
   font-weight: 500 !important;
+}
+
+/* ==========================================================================
+   Blockquote & Callouts (Claude Editorial Cards)
+   ========================================================================== */
+blockquote {
+  border-left: 3.5px solid var(--claude-terracotta, #D97757) !important;
+  background-color: var(--claude-cream-card, #F5F2EB) !important;
+  color: var(--color-text, #1F1E1D) !important;
+  border-radius: 0 8px 8px 0 !important;
+  padding: 0.9rem 1.3rem !important;
+  margin: 1.4rem 0 !important;
+  font-size: 0.96rem !important;
+  line-height: 1.68 !important;
+}
+
+html.dark blockquote {
+  background-color: #22211F !important;
+  color: #EDEAE4 !important;
+  border-left-color: #D97757 !important;
+}
+
+html.dark blockquote p {
+  color: #EDEAE4 !important;
+}
+
+html.dark blockquote strong {
+  color: #FAF8F5 !important;
+}
+
+html.dark blockquote ul,
+html.dark blockquote li {
+  color: #DDD9D0 !important;
+}
+
+.callout, blockquote.callout, .alert {
+  border-radius: 8px !important;
+  padding: 1rem 1.25rem !important;
+  margin: 1.4rem 0 !important;
+  border: 1px solid transparent !important;
+  font-size: 0.96rem !important;
+}
+
+/* Note: Claude Warm Terracotta */
+.callout-note, .alert-note {
+  background: #FAF2ED !important;
+  border-color: #F0D4C7 !important;
+  border-left: 4px solid var(--claude-terracotta) !important;
+  color: #5C2B1B !important;
+}
+
+html.dark .callout-note,
+html.dark .alert-note {
+  background: rgba(217, 119, 87, 0.14) !important;
+  border-color: rgba(217, 119, 87, 0.28) !important;
+  border-left: 4px solid var(--claude-terracotta) !important;
+  color: #F5C6B7 !important;
 }
 
 /* ==========================================================================
@@ -487,72 +665,43 @@ code, pre {
   font-size: 0.88em !important;
 }
 
-pre {
+html.dark :not(pre) > code {
+  background: #282724 !important;
+  color: #F09E84 !important;
+  border-color: #383531 !important;
+}
+
+pre, .content pre, .code-wrapper > pre {
   background: var(--color-code-bg) !important;
+  color: var(--color-code-text) !important;
   border: 1px solid var(--color-code-border) !important;
   border-radius: 8px !important;
   padding: 1.1em 1.3em !important;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
 }
 
-/* ==========================================================================
-   GFM Callout Boxes (Warm Anthropic Editorial Badges)
-   ========================================================================== */
-.callout, blockquote.callout, .alert {
-  border-radius: 8px !important;
-  padding: 1rem 1.25rem !important;
-  margin: 1.4rem 0 !important;
-  border: 1px solid transparent !important;
-  font-size: 0.96rem !important;
+html.dark pre,
+html.dark .content pre,
+html.dark .code-wrapper > pre,
+html.dark .chroma {
+  background: #201F1D !important;
+  color: #EDEAE4 !important;
+  border-color: #34322E !important;
+  box-shadow: none !important;
 }
 
-/* Note: Claude Warm Terracotta */
-.callout-note, .alert-note {
-  background: #FAF2ED !important;
-  border-color: #F0D4C7 !important;
-  border-left: 4px solid var(--claude-terracotta) !important;
-  color: #5C2B1B !important;
+html.dark .code-wrapper[data-lang]::before {
+  color: #8C8880 !important;
 }
 
-/* Tip: Warm Sage Olive */
-.callout-tip, .alert-tip {
-  background: #F1F6F2 !important;
-  border-color: #D2E4D6 !important;
-  border-left: 4px solid #4D805B !important;
-  color: #21472D !important;
+html.dark .code-wrapper .copy-btn {
+  background: rgba(36, 35, 32, 0.85) !important;
+  border-color: #3E3B36 !important;
+  color: #A09C94 !important;
 }
 
-/* Warning: Warm Amber */
-.callout-warning, .alert-warning {
-  background: #FDF7EB !important;
-  border-color: #F2E0BD !important;
-  border-left: 4px solid #D98C27 !important;
-  color: #633E0B !important;
-}
-
-/* Important: Muted Coral */
-.callout-important, .alert-important {
-  background: #FAF0F0 !important;
-  border-color: #F1CECE !important;
-  border-left: 4px solid #D14D4D !important;
-  color: #681F1F !important;
-}
-
-/* Dark Mode Callouts */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .callout-note,
-  :root:not([data-theme="light"]) .alert-note {
-    background: rgba(217, 119, 87, 0.12) !important;
-    border-color: rgba(217, 119, 87, 0.28) !important;
-    border-left: 4px solid var(--claude-terracotta) !important;
-    color: #F5C6B7 !important;
-  }
-}
-[data-theme="dark"] .callout-note, body.dark-mode .callout-note {
-  background: rgba(217, 119, 87, 0.12) !important;
-  border-color: rgba(217, 119, 87, 0.28) !important;
-  border-left: 4px solid var(--claude-terracotta) !important;
-  color: #F5C6B7 !important;
+html.dark .code-wrapper:hover .copy-btn {
+  color: #EDEAE4 !important;
 }
 
 /* ==========================================================================
@@ -567,6 +716,10 @@ table {
   overflow: hidden;
 }
 
+html.dark table {
+  border-color: #34322E !important;
+}
+
 th {
   background-color: var(--color-table-header) !important;
   color: var(--color-heading) !important;
@@ -575,13 +728,32 @@ th {
   padding: 10px 14px;
 }
 
+html.dark th {
+  background-color: #242320 !important;
+  color: #F7F5F0 !important;
+  border-bottom: 2px solid var(--claude-terracotta) !important;
+}
+
 td {
   padding: 10px 14px;
   border-bottom: 1px solid var(--color-border);
 }
 
+html.dark td {
+  border-bottom-color: #34322E !important;
+  color: #E2DFD8 !important;
+}
+
 tr:nth-child(even) td {
   background-color: var(--color-table-stripe-alt);
+}
+
+html.dark tr:nth-child(even) td {
+  background-color: #1B1A18 !important;
+}
+
+html.dark tr:hover td {
+  background-color: rgba(217, 119, 87, 0.08) !important;
 }
 
 /* ==========================================================================
@@ -596,4 +768,3 @@ tr:nth-child(even) td {
 body {
   margin: 0 !important;
 }
-

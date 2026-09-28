@@ -1,0 +1,90 @@
+---
+title: "1.4 内核故障注入机制（fail_loc）"
+description: "分布式存储系统必须具备处理各类异常的能力，包括网络分区、RPC 丢包延迟、存储写入中途掉电、并发分配竞态等。"
+---
+
+# 1.4 内核故障注入机制（fail_loc）
+
+分布式存储系统必须具备处理各类异常的能力，包括网络分区、RPC 丢包延迟、存储写入中途掉电、并发分配竞态等。但在生产物理环境中，上述极限时序难以通过常规黑盒测试稳定复现。
+
+`libcfs` 在 `libcfs/include/libcfs/libcfs_fail.h` 中内置了一套运行时内核故障注入框架。
+
+## 1.4.1 位掩码结构
+
+故障注入行为由一个 32 位无符号整型变量 `fail_loc` 统一控制。该变量在逻辑上被划分为两部分：
+
+```text
+31             24 23             16 15                             0
++----------------+----------------+--------------------------------+
+|  动作修饰掩码   |    保留标志位   |     故障点唯一编号 (Location ID) |
+| (Action Flags) |                |       例如: OBD_FAIL_OST_...   |
++----------------+----------------+--------------------------------+
+```
+
+高位包含以下主要动作标志位：
+
+| 动作标志位 | 十六进制值 | 说明 |
+| :--- | :--- | :--- |
+| `CFS_FAIL_ONCE` | `0x80000000` | 仅触发一次故障。触发后内核自动将 `fail_loc` 重置为 `0` |
+| `CFS_FAIL_RAND` | `0x40000000` | 按概率随机触发，触发概率为 $1 / \text{fail\_val}$ |
+| `CFS_FAIL_SOME` | `0x10000000` | 触发指定次数，触发次数由 `fail_val` 指定，每触发一次递减直至归零 |
+| `CFS_FAIL_TIMEOUT` | `0x08000000` | 阻塞当前线程指定秒数（由 `fail_val` 指定），模拟网络延迟或卡顿 |
+| `CFS_FAULT` | `0x04000000` | 模拟底层资源分配故障（如内存分配返回 `NULL`） |
+
+低 16 位为具体子系统埋设的故障点编号（Location ID），例如 `OBD_FAIL_OST_ALLOC_RACE`、`OBD_FAIL_PTLRPC_DELAY_SEND`。
+
+## 1.4.2 埋点实现与判定流程
+
+在内核关键代码路径中，通过宏定义植入判定点：
+
+```c
+/* 模拟对象分配时的并发竞争，返回重试错误码 */
+if (CFS_FAIL_CHECK(OBD_FAIL_OST_ALLOC_RACE)) {
+    RETURN(-EAGAIN);
+}
+
+/* 模拟网络发送延迟 5 秒，以验证客户端自适应超时 (Adaptive Timeouts) 逻辑 */
+if (CFS_FAIL_TIMEOUT(OBD_FAIL_PTLRPC_DELAY_SEND, 5)) {
+    /* 内核将在此主动休眠 5 秒 */
+}
+```
+
+内部核心判断函数实现如下：
+
+```c
+static inline bool __cfs_fail_check_set(__u32 id, __u32 value, int set)
+{
+    /* 第一阶段：快速路径检查。在绝大多数生产正常情况下，fail_loc 为 0，仅耗费一次整型比对 */
+    if (likely(cfs_fail_loc == 0))
+        return false;
+
+    /* 第二阶段：提取低 16 位比对当前检查点 ID */
+    if ((cfs_fail_loc & 0xffff) != (id & 0xffff))
+        return false;
+
+    /* 第三阶段：处理动作修饰符 (ONCE / RAND / SOME / TIMEOUT) */
+    return __cfs_fail_val(id, value, set);
+}
+```
+
+在生产环境下，只要保持 `fail_loc` 为 `0`，`likely(cfs_fail_loc == 0)` 的分支预测即生效，单次判定仅耗费数条指令周期，对正常代码执行几乎无性能损耗。
+
+## 1.4.3 动态激活接口
+
+测试人员可通过用户态工具或 ProcFS 接口动态激活故障点：
+
+```bash
+# 1. 模拟网络 RPC 发送延迟：配置故障码 OBD_FAIL_PTLRPC_DELAY_SEND (0x506) 并附加 CFS_FAIL_TIMEOUT
+# 设定延迟时间为 10 秒
+lctl set_param fail_val=10
+lctl set_param fail_loc=0x08000506
+
+# 2. 模拟单次内存耗尽故障：注入 CFS_FAIL_ONCE | OBD_FAIL_TND_ALLOC_FAIL
+lctl set_param fail_loc=0x80000123
+
+# 3. 演练完毕后，重置并关闭所有故障注入
+lctl set_param fail_loc=0
+```
+
+---
+

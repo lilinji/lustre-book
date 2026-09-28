@@ -1,0 +1,41 @@
+---
+title: "17.4 透明召回流水线与数据流（Transparent Recall）"
+description: "当用户进程尝试打开并读取一个处于 RELEASED 状态的冷数据文件时，Lustre 的透明召回机制确保应用程序无须感知任何底层复杂性："
+---
+
+# 17.4 透明召回流水线与数据流（Transparent Recall）
+
+当用户进程尝试打开并读取一个处于 `RELEASED` 状态的冷数据文件时，Lustre 的透明召回机制确保应用程序无须感知任何底层复杂性：
+
+![HSM 透明召回与数据流全景](/images/manual_fig21_hsm_data_flow.png)
+
+结合图 17-4 展示的交互数据流，完整召回流程如下：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as 用户态程序 (计算节点)
+    participant VFS as 客户端内核 (llite / cl_io)
+    participant MDT as MDT Coordinator
+    participant Agent as 专有搬移节点 (Copytool)
+    participant S3 as 二级归档存储 (S3 / 磁带)
+    participant OST as 存储目标 (OST)
+
+    App->>VFS: open("/mnt/lustre/archive_model.pt", O_RDONLY)
+    VFS->>MDT: MDT_OPEN RPC (申请元数据与布局锁)
+    Note over MDT: 检测到文件标记有 HS_RELEASED<br/>Coordinator 挂起客户端的 OPEN 响应
+    MDT->>Agent: 派发 RESTORE 任务 (FID, Archive ID)
+    Agent->>S3: 获取对象数据流 (HTTP GET)
+    Agent->>OST: 通过 Lustre 内核 API 将数据块并发写回 OST (llapi_hsm_data_copy)
+    OST-->>Agent: 数据写入落盘确认
+    Agent->>MDT: 发送 RESTORE 完成回执 (llapi_hsm_copytool_done)
+    Note over MDT: 更新状态为 HS_ARCHIVED (清除 HS_RELEASED)<br/>重新生成 OST 条带布局描述符
+    MDT-->>VFS: 解除挂起，返回 OPEN 成功及正常条带布局
+    VFS->>OST: 客户端全速向 OST 发起并行 read()
+    OST-->>App: 数据读取成功，应用无任何异常感知
+```
+
+在整个透明召回期间，客户端进程仅仅表现为系统调用微秒/秒级的暂时挂起。一旦 Copytool 将数据灌回 OST，I/O 管道瞬间打通，用户程序平滑恢复。
+
+---
+

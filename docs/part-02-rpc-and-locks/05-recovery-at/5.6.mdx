@@ -1,0 +1,34 @@
+---
+title: "5.6 生产实战：Recovery & AT 参数调优与故障排查"
+description: "生产环境中通常在 /etc/modprobe."
+---
+
+# 5.6 生产实战：Recovery & AT 参数调优与故障排查
+
+## 5.6.1 核心恢复与超时参数配置
+
+生产环境中通常在 `/etc/modprobe.d/lustre.conf` 中调整如下参数：
+
+```bash
+# 1. 启用自适应超时 (默认开启)
+options ptlrpc at_min=5 at_max=120 at_history=600
+
+# 2. 恢复窗口保护时限 (单位秒)
+options ptlrpc obd_timeout=60
+```
+
+- **`at_min`**：自适应超时的下限（秒），防止极端网络波动下超时估算过低引发频繁超时。
+- **`at_max`**：自适应超时的上限（秒），确保在出现死锁或严重硬件故障时，系统在可预期的最长时限内终止等待并报错。
+- **`at_history`**：移动平均算法的历史统计窗口大小（秒）。
+- **`obd_timeout`**：基础连接与恢复窗口参数，服务端等待客户端完成重连重放的最大基准时间。
+
+## 5.6.2 常用状态监控与指标查看
+
+| 监控目的 | 执行命令 | 输出关注重点 |
+| :--- | :--- | :--- |
+| **查看 Import 连接状态** | `lctl get_param osc.*.import` | 关注 `state: FULL` 是否正常，以及 `transno` 和 `last_committed` 差距。 |
+| **监控服务端恢复进度** | `lctl get_param mdt.*.recovery_status` | 监控处于恢复状态的客户端数量（`connected_clients`）、剩余恢复倒计时（`time_remaining`）。 |
+| **查看当前自适应超时预估** | `lctl get_param mdt.*.timeouts` | 查看各 Portal 队列当前计算出的预估服务耗时。 |
+
+---
+

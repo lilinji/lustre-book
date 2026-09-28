@@ -1,0 +1,34 @@
+---
+title: "2.6 LNet 动态配置 C-API 与 lnetctl 体系"
+description: "图 2-7: LNet 用户态配置体系：liblnetconfig C-API 与底层内核 ioctl 通信架构（来源：Lustre Chinese Operations Manual）"
+---
+
+# 2.6 LNet 动态配置 C-API 与 lnetctl 体系
+
+![LNet 配置 C-API 结构](/images/manual_fig24_lnet_config_c_api.png)
+
+*图 2-7: LNet 用户态配置体系：liblnetconfig C-API 与底层内核 ioctl 通信架构（来源：Lustre Chinese Operations Manual）*
+
+官方操作手册详细定义了 LNet 的现代化配置体系。LNet 废弃了早期的静态模块参数重载机制，全面转向基于 YAML 与 `liblnetconfig` 的用户态动态管理工具 `lnetctl`。
+
+## 2.6.1 常用 lnetctl 动态运维操作
+
+```bash
+# 1. 动态添加本地网络接口 (绑定特定 NUMA CPT)
+lnetctl net add --net o2ib0 --if mlx5_0 --cpt 0
+
+# 2. 动态向指定 Peer 添加多轨网卡
+lnetctl peer add --prim_nid 10.10.1.20@o2ib0 --nid 10.10.2.20@o2ib1
+
+# 3. 动态配置跨网络路由
+lnetctl route add --net tcp0 --gateway 10.10.1.100@o2ib0 --hop 1 --priority 1
+
+# 4. 导出当前全部 LNet 网络拓扑为 YAML 配置文件
+lnetctl export > /etc/lnet.conf
+
+# 5. 查看链路健康统计与故障计数
+lnetctl net show --detail
+```
+
+---
+

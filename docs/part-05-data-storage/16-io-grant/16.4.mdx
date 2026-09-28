@@ -1,0 +1,36 @@
+---
+title: "16.4 分布式 Bulk RDMA I/O 流水线状态机"
+description: "大块数据读写流水线涉及客户端 OSC 与服务端 OFD 的多阶段状态协同："
+---
+
+# 16.4 分布式 Bulk RDMA I/O 流水线状态机
+
+大块数据读写流水线涉及客户端 OSC 与服务端 OFD 的多阶段状态协同：
+
+```mermaid
+stateDiagram-v2
+    [*] --> PREP_PAGES: 客户端准备内存页数组，构建 ptlrpc_bulk_desc
+    
+    PREP_PAGES --> CHECK_GRANT: 写入校验 Grant 额度是否充足
+    
+    CHECK_GRANT --> SEND_RPC: 封装控制报文与 Match Bits，通过 LNet 发出
+    
+    SEND_RPC --> WAIT_BULK: 等待服务端调度 RDMA 传输
+    
+    WAIT_BULK --> RDMA_ACTIVE: 网卡硬件执行零拷贝单向数据拉取 / 推送
+    
+    RDMA_ACTIVE --> DISK_COMMIT: 服务端接收完毕，提交本地文件系统事务落盘
+    
+    DISK_COMMIT --> FINAL_REPLY: 服务端回传 RPC 应答，更新事务号与 Grant
+    
+    FINAL_REPLY --> [*]: 释放物理页映射，完成端到端生命周期
+```
+
+1. **`PREP_PAGES`**：客户端将 VFS 传递的散列物理内存页装配入 `ptlrpc_bulk_desc`，通过 `LNetMDAttach()` 完成底层 RDMA 内存描述符绑定。
+2. **`CHECK_GRANT`**：针对写请求，执行严格的 Grant 额度扣减。
+3. **`SEND_RPC` 与 `WAIT_BULK`**：发送轻量级控制报文，等待服务端解析请求并根据服务端当前 I/O 队列深度调度网络 RDMA 操作。
+4. **`RDMA_ACTIVE`**：网卡硬件通道在不经过 CPU 拷贝的前提下完成物理页面至远程主机的极速传输。
+5. **`DISK_COMMIT` 与 `FINAL_REPLY`**：服务端底层提交写入，回传持久化确认并更新客户端在途信用。
+
+---
+

@@ -1,0 +1,47 @@
+---
+title: "12.2 二进制数据结构：struct changelog_rec"
+description: "产生于 MDT 内部的元数据事件，被序列化为连续紧凑的二进制记录："
+---
+
+# 12.2 二进制数据结构：struct changelog_rec
+
+产生于 MDT 内部的元数据事件，被序列化为连续紧凑的二进制记录：
+
+```c
+struct changelog_rec {
+    __u16                   cr_namelen;         /* 记录末尾紧跟的文件名或路径字符串长度 */
+    __u16                   cr_flags;           /* 扩展标记位 (如包含 JobID 或扩展属性) */
+    __u32                   cr_type;            /* 事件类型：CL_CREATE, CL_UNLINK, CL_CLOSE... */
+    __u64                   cr_index;           /* 全局单调递增的 64 位日志序列索引号 */
+    __u64                   cr_prev;            /* 本对象上一次变更事件的索引号 (因果链) */
+    __u64                   cr_time;            /* 事件发生的 64 位纳秒级时间戳 */
+    struct lu_fid           cr_tfid;            /* 目标对象的全局唯一 FID */
+    struct lu_fid           cr_pfid;            /* 目标对象所属父目录的全局唯一 FID */
+};
+```
+
+## 核心事件类型枚举
+
+在 `include/uapi/linux/lustre/lustre_user.h` 中，定义了核心变更类型（`enum changelog_rec_type`）：
+
+```c
+enum changelog_rec_type {
+    CL_MARK     = 0,    /* 管理员手动注入的时间点标记 */
+    CL_CREATE   = 1,    /* 创建普通文件或子目录 */
+    CL_MKDIR    = 2,    /* 创建目录 */
+    CL_HARDLINK = 3,    /* 创建硬链接 */
+    CL_SOFTLINK = 4,    /* 创建软符号链接 */
+    CL_UNLINK   = 8,    /* 删除文件或链接 */
+    CL_RMDIR    = 9,    /* 删除目录 */
+    CL_RENAME   = 10,   /* 文件重命名 (附带源/目标父目录 FID) */
+    CL_EXT      = 12,   /* 扩展属性或 ACL 变更 */
+    CL_CLOSE    = 14,   /* 携带写标记的文件句柄被正式关闭 (HSM 归档触发信号) */
+    CL_TRUNC    = 16,   /* 文件长度截断 (truncate) */
+    CL_SETATTR  = 17,   /* 属主或权限模式变更 (chmod/chown) */
+};
+```
+
+若开启扩展配置，记录尾部可自动追加发起该操作的客户端超算调度作业编号（SLURM / PBS Job ID），使得安全审计能够直接定位到具体的计算作业。
+
+---
+

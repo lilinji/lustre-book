@@ -1,0 +1,30 @@
+---
+title: "14.5 生产实战：OST/OSD 存储引擎 参数调优与监控指标"
+description: "| 监控目的 | 执行命令 | 输出关注重点 | | :--- | :--- | :--- | | 监控 OST 读写带宽与 IOPS | lctl getparam obdfilter..stats | 查看 readbytes、writ..."
+---
+
+# 14.5 生产实战：OST/OSD 存储引擎 参数调优与监控指标
+
+## 13.5.1 常用参数配置
+
+```bash
+# 1. 调整 OST 预分配对象数量的水位线
+lctl set_param ofd.testfs-OST0000.create_count=20000
+
+# 2. 控制每个 OST 的最大在途 RPC 数量 (提升并发度)
+lctl set_param osc.testfs-OST0000-osc-*.max_rpcs_in_flight=32
+
+# 3. 针对 ldiskfs 开启多块提交与预读优化
+lctl set_param osd-ldiskfs.testfs-OST0000.writethrough_cache=0
+```
+
+## 13.5.2 常用状态监控与指标查看
+
+| 监控目的 | 执行命令 | 输出关注重点 |
+| :--- | :--- | :--- |
+| **监控 OST 读写带宽与 IOPS** | `lctl get_param obdfilter.*.stats` | 查看 `read_bytes`、`write_bytes` 吞吐与单次 I/O 耗时分布。 |
+| **查看块 I/O 碎片聚合度** | `lctl get_param obdfilter.*.brw_stats` | 查看磁盘读写尺寸分布直方图（评估 1MB+ 大块 I/O 占比）。 |
+| **监控预分配池状态** | `lctl get_param ofd.*.precreate_batch` | 评估对象预分配池余量与补充速率。 |
+
+---
+

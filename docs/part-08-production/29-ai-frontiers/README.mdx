@@ -1,0 +1,23 @@
+---
+title: "第 29 章：面向 AI 时代的演进与前沿架构 (GDS / DAOS 反思)"
+description: "> 本章核心源码文件与接口：   > - lustre/llite/file."
+---
+
+# 第 29 章：面向 AI 时代的演进与前沿架构 (GDS / DAOS 反思)
+
+> **本章核心源码文件与接口**：  
+> - `lustre/llite/file.c`：直接 I/O（`O_DIRECT`）与 GPU 显存缓冲区（GPU HBM）适配路径  
+> - `lnet/klnds/o2iblnd/o2iblnd.c`：对 GPU 物理内存基地址寄存器（BAR 空间）的 RDMA 注册与 DMA 映射  
+> - `libcfs/libcfs/libcfs_mem.c`：端到端跨设备 Peer-to-Peer DMA 映射与非统一内存兼容  
+> - `include/uapi/linux/lustre/lustre_user.h`：GDS 兼容标志位与用户态扩展接口定义  
+> - `cufile.h`：NVIDIA Magnum IO GPUDirect Storage（cuFile API）用户态直通调用定义  
+
+---
+
+## 本章核心小节导读
+
+- [29.1 AI 大模型时代对传统并行存储的冲击](./29.1)
+- [29.2 GPU Direct Storage（GDS）：穿透 Host 内存的硬件直通](./29.2)
+- [29.3 现代存储架构反思：Lustre 与 DAOS 的架构对决](./29.3)
+- [29.4 未来演进：混合智算分层存储体系](./29.4)
+- [本章小结：AI 前沿与 GDS 核心思考与自检](./summary)
